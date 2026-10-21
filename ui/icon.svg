@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="512" y1="96" x2="512" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" />
+      <stop offset=".72" stop-color="#fafbfc" />
+      <stop offset="1" stop-color="#edf0f2" />
+    </linearGradient>
+    <linearGradient id="mint" x1="300" y1="450" x2="750" y2="740" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18cda0" />
+      <stop offset="1" stop-color="#00a879" />
+    </linearGradient>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="190" fill="url(#tile)" />
+  <rect
+    x="98"
+    y="98"
+    width="828"
+    height="828"
+    rx="188"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="4"
+  />
+  <path
+    d="M292 568V348H684"
+    fill="none"
+    stroke="#18201e"
+    stroke-width="68"
+    stroke-linejoin="miter"
+  />
+  <path d="M640 266L740 348L640 430Z" fill="#18201e" />
+  <path
+    d="M732 456V676H340"
+    fill="none"
+    stroke="url(#mint)"
+    stroke-width="68"
+    stroke-linejoin="miter"
+  />
+  <path d="M384 594L284 676L384 758Z" fill="#11bb8d" />
+  <path d="M446 454L502 510L446 566L390 510Z" fill="#18201e" />
+  <path d="M578 454L634 510L578 566L522 510Z" fill="#18201e" />
+</svg>

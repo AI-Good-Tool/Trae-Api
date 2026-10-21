@@ -1,0 +1,15 @@
+{
+  "version": "0.3.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "artifact": "dist/mac-0.3.0/Trae-Switch-0.3.0-macOS-arm64.dmg",
+  "bytes": 141180075,
+  "sha256": "9072f1f7b159cc8ada082dc9ddb5a8ed2f813c47cde24e38b8bbe32501d4ad3a",
+  "tests": 18,
+  "format": "passed",
+  "codesign": "deep strict verified",
+  "dmg": "hdiutil verified",
+  "ui": "isolated fixture alias edit/save and checkin page verified",
+  "notarized": false,
+  "liveChatVerified": false
+}

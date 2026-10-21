@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "builtAt": "2026-10-21T05:08:21.941Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "minimumMacOS": "13.0",
+  "artifact": "dist/mac-0.2.0/Trae-Switch-0.2.0-macOS-arm64.dmg",
+  "bytes": 141176112,
+  "sha256": "a387acfe475e022876112e59e42f4f80f7be66fca5ef3a802cf0f408f26c7b84",
+  "signing": "ad-hoc",
+  "notarized": false,
+  "verification": {
+    "automatedTests": 14,
+    "testsPassed": 14,
+    "format": "passed",
+    "signature": "codesign --verify --deep --strict passed",
+    "image": "hdiutil verify passed",
+    "mountedImage": "signature and contained framework symlinks verified",
+    "nativeLaunch": "passed",
+    "packagedSourceAndIcon": "matched",
+    "packagedSecrets": false,
+    "productionDependencyAuditVulnerabilities": 0
+  },
+  "knownLimitations": [
+    "通用模型 Remote 调用链未完成",
+    "SQLCipher 历史 Token 尚未解密",
+    "完整 OAuth、账号切换与凭证轮换仍待实测"
+  ]
+}

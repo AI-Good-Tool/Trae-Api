@@ -1,0 +1,12 @@
+{
+  "version": "0.3.1",
+  "artifact": "dist/mac-0.3.1/Trae-Switch-0.3.1-macOS-arm64.dmg",
+  "bytes": 141180653,
+  "sha256": "00fe46a49dd7e9caceda9d2020286fc11f3fc3126f7f351d63c00b158205094b",
+  "tests": 20,
+  "format": "passed",
+  "signature": "ad-hoc verified deep strict",
+  "dmg": "verified",
+  "ui": "isolated fixture cards, pack dialog and auto checkin toggle verified",
+  "notarized": false
+}
