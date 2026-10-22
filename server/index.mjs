@@ -221,6 +221,7 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
       const files = {
         '/': 'index.html',
         '/app.js': 'app.js',
+        '/request-chart.js': 'request-chart.js',
         '/style.css': 'style.css',
         '/icon.svg': 'icon.svg',
       };

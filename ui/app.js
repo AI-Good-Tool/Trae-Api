@@ -1,3 +1,5 @@
+import { renderRequestChart } from './request-chart.js';
+
 const icons = {
   star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9Z"/>',
   phone: '<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 5h4m-3 14h2"/>',
@@ -277,24 +279,9 @@ function activityList() {
   );
 }
 function requestChart() {
-  const records = state.requests.filter((r) => r.status === 'success');
-  if (!records.length)
-    return `<div class="chart-empty"><p>等待第一条成功的反代请求<br>用量趋势将根据真实请求生成</p></div><div class="axis">${Array.from(
-      { length: 7 },
-      (_, i) => {
-        const d = new Date();
-        d.setDate(d.getDate() - 6 + i);
-        return `<span>${date(d)}</span>`;
-      },
-    ).join('')}</div>`;
-  const counts = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date();
-      d.setDate(d.getDate() - 6 + i);
-      return records.filter((r) => date(r.time) === date(d)).length;
-    }),
-    max = Math.max(...counts, 1);
-  return `<div class="chart-bars">${counts.map((n) => `<progress class="chart-bar" max="${max}" value="${n}" title="${n} 次请求"></progress>`).join('')}</div>`;
+  return renderRequestChart(state.requests);
 }
+
 function overview() {
   const cn = state.accounts
       .filter((a) => a.variant === 'cn')
