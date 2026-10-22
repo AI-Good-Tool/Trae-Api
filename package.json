@@ -20,7 +20,7 @@
     "node": ">=22"
   },
   "devDependencies": {
-    "@electron/packager": "^20.4.1",
+    "@electron/packager": "20.3.0",
     "@resvg/resvg-js": "^2.6.2",
     "electron": "^44.9.3",
     "prettier": "^3.9.10"

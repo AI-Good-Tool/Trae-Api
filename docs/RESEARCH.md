@@ -60,7 +60,7 @@
 
 ## 2026-10-22 Remote / Claude Code 更新
 
-已用官方 /api/remote/v1/models 与 chat_sessions + events 打通国内 deepseek-v4.1-flash，模型配置由官方目录完整绑定，model_config 确认实际模型，finish summary 与 completed 终态确认完成。旧 raw/FastApply 路径的结论仍作为历史研究保留，不再用它驱动生产请求。Messages、客户端工具往返和最终打包应用均完成 CC GUI 实测，详情见 REVIEW-0.4.1.md。国际版和其他模型不在本次真实验证范围。
+已用官方 /api/remote/v1/models 与 chat_sessions + events 打通国内 deepseek-v4.1-flash，模型配置由官方目录完整绑定，model_config 确认实际模型，finish summary 与 completed 终态确认完成。旧 raw/FastApply 路径的结论仍作为历史研究保留，不再用它驱动生产请求。Messages、客户端工具往返和最终打包应用均完成 CC GUI 实测，当前范围见 REVIEW-0.7.0.md。国际版和其他模型不在本次真实验证范围。
 
 ## 0.6.1 客户端索引读取补充
 
