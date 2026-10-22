@@ -111,5 +111,15 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release already exists; refusing to overwrite update assets"; exit 1
           fi
-          (cd release-assets && sha256sum --check *.sha256)
-          gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --title "Trae Switch $tag" --generate-notes
+          mapfile -d '' assets < <(find release-assets -type f -print0)
+          if (( ${#assets[@]} == 0 )); then
+            echo "No release assets were downloaded"; exit 1
+          fi
+          for asset in "${assets[@]}"; do
+            case "$asset" in
+              *.sha256) (cd "$(dirname "$asset")" && sha256sum --check "$(basename "$asset")") ;;
+              *.dmg|*.exe|*.zip) test -f "$asset.sha256" ;;
+              *) echo "Unexpected release asset: $asset"; exit 1 ;;
+            esac
+          done
+          gh release create "$tag" "${assets[@]}" --target "$GITHUB_SHA" --title "Trae Switch $tag" --generate-notes

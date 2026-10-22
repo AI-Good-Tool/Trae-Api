@@ -177,9 +177,11 @@ test('Remote 绑定真实模型、终态去重与官方 usage，失败或截断�
       assert.equal(events[0].data.usage.prompt_tokens, 12);
     } else {
       await assert.rejects(run(), /truncated_stream/);
-      assert(calls.at(-1).url.endsWith('/stop'));
+      assert(calls.at(-2).url.endsWith('/stop'));
     }
     const request = JSON.parse(calls.find((c) => c.url.endsWith('/chat_sessions')).options.body);
     assert.equal(request.initial_message.custom_model.name, 'test');
+    assert.equal(calls.at(-1).options.method, 'DELETE');
+    assert(calls.at(-1).url.endsWith('/chat_sessions/s'));
   }
 });

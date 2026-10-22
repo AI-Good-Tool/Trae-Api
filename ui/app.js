@@ -398,7 +398,7 @@ function gatewayPage() {
       '按真实模型匹配国内与国际账号，共有模型跨区调度，独有模型自动限定账号池。',
       `<button class="${settings.gatewayRunning ? '' : 'primary'}" data-action="toggle-gateway">${icon('proxy')}${settings.gatewayRunning ? '停止服务' : '启动服务'}</button>`,
     ) +
-    `<div class="notice">通过官方 Remote Agent 调用模型，支持 Chat Completions 与 Claude Code Messages。Messages 工具调用使用提示协议桥接，由客户端执行；目前仅支持文本。Responses 尚未接入。</div>
+    `<div class="notice">通过官方 Remote Agent 调用，每次请求结束后自动清理本次创建的临时云端任务；清理失败自动重试，不处理已有云端会话。请求记录保留在本机。支持 Chat Completions 与 Claude Code Messages，工具由调用客户端执行，目前仅支持文本。Responses 尚未接入。</div>
  <div class="split"><section class="panel"><div class="panel-header"><h2>服务连接</h2><span class="badge ${settings.gatewayRunning ? '' : 'warning'}">${settings.gatewayRunning ? '运行中' : '已停止'}</span></div>
  <div class="field"><label for="gateway-region">使用地区</label><select id="gateway-region"><option value="all" ${region === 'all' ? 'selected' : ''}>双区联合 · 国内 + 国际</option><option value="cn" ${region === 'cn' ? 'selected' : ''}>国内版 · Trae CN</option><option value="intl" ${region === 'intl' ? 'selected' : ''}>国际版 · Trae</option></select><p>统一 /v1 跟随此配置；/cn/v1 与 /intl/v1 始终限定对应地区。</p></div>
  <div class="field"><label>Base URL · ${region === 'all' ? '双区联合' : region === 'cn' ? '国内版' : '国际版'}</label><div class="key-line"><code>${base}</code><button data-action="copy-url">${icon('copy')}复制</button></div></div>
@@ -457,7 +457,7 @@ function requestsPage() {
             r.inputTokens !== undefined &&
             r.outputTokens !== null &&
             r.outputTokens !== undefined;
-          return `<tr><td class="request-time">${new Date(r.time).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}<small>${date(r.time)}</small></td><td class="request-model">${esc(r.model || '—')}<small>真实：${esc(r.realModel || r.model || '—')}</small></td><td>${esc(name)}<small>${r.variant === 'cn' ? '国内版' : '国际版'}</small></td><td><strong class="token-total">${complete ? fmt(r.inputTokens + r.outputTokens) : '未提供'}</strong><small>入 ${fmt(r.inputTokens)} / 出 ${fmt(r.outputTokens)}</small></td><td>${esc(r.protocol || 'Chat Completions')}${r.stream ? '<small>SSE 流式</small>' : ''}</td><td><span class="status-code ${r.status === 'success' ? 'ok' : r.status === 'pending' ? 'pending' : 'failed'}">${r.httpStatus ?? '—'}</span></td><td class="request-time">${r.duration === undefined ? '—' : fmt(r.duration) + ' ms'}</td><td>${statuses[r.status] || '未知'}</td><td><button class="quiet request-detail" data-action="request-detail" data-id="${esc(r.id)}">详情</button></td></tr>`;
+          return `<tr><td class="request-time">${new Date(r.time).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}<small>${date(r.time)}</small></td><td class="request-model">${esc(r.model || '—')}<small>真实：${esc(r.realModel || r.model || '—')}</small></td><td>${esc(name)}<small>${r.variant === 'cn' ? '国内版' : '国际版'}</small></td><td><strong class="token-total">${complete ? fmt(r.inputTokens + r.outputTokens) : '未提供'}</strong><small>入 ${fmt(r.inputTokens)} / 出 ${fmt(r.outputTokens)}</small></td><td>${esc(r.protocol || 'Chat Completions')}${r.stream ? '<small>SSE 流式</small>' : ''}</td><td><span class="status-code ${r.status === 'success' ? 'ok' : r.status === 'pending' ? 'pending' : 'failed'}">${r.httpStatus ?? '—'}</span></td><td class="request-time">${r.duration === undefined ? (r.status === 'pending' ? Math.max(0, Math.floor((Date.now() - Date.parse(r.time)) / 1000)) + ' s' : '—') : fmt(r.duration) + ' ms'}</td><td>${statuses[r.status] || '未知'}${r.status === 'pending' && r.transport === 'Local' ? '<small>' + esc(localStageLabel(r.localStage)) + '</small>' : ''}</td><td><button class="quiet request-detail" data-action="request-detail" data-id="${esc(r.id)}">详情</button></td></tr>`;
         })
         .join('')}</tbody></table></div>`
     : empty('暂无匹配的请求记录', '通过当前网关发起请求后，会在这里记录真实运行元数据。');
@@ -492,6 +492,17 @@ function requestsPage() {
    )}</select><input id="request-search" value="${esc(requestView.query)}" placeholder="搜索模型、账号或请求 ID" aria-label="搜索请求记录"><button data-action="filter-records">${icon('search')}筛选</button></div><span class="subtle">${rows.length} 条记录</span></div>${table}<div class="pagination"><span>第 ${requestView.page} / ${pages} 页 · 每页 ${size} 条</span><div class="actions"><button data-action="requests-prev" ${requestView.page === 1 ? 'disabled' : ''}>上一页</button><button data-action="requests-next" ${requestView.page === pages ? 'disabled' : ''}>下一页</button></div></div></section>`
   );
 }
+function localStageLabel(stage) {
+  return (
+    {
+      loading_models: '读取模型目录',
+      starting_runtime: '启动本地通道',
+      waiting_model: '等待模型响应',
+      generating: '模型生成中',
+      completed: '生成完成',
+    }[stage] || '—'
+  );
+}
 function requestDetail(id) {
   const r = state.requests.find((x) => x.id === id);
   if (!r) {
@@ -517,6 +528,31 @@ function requestDetail(id) {
     ['方法 / 路径', `${r.method || 'POST'} ${r.path || '/v1/chat/completions'}`],
     ['HTTP 状态', r.httpStatus ?? '未提供'],
     ['上游 HTTP', r.upstreamStatus ?? '未请求'],
+    [
+      '反代通道',
+      r.transport === 'Local' ? '本地会话' : r.transport === 'Remote' ? '云端任务' : '—',
+    ],
+    ['本地处理阶段', localStageLabel(r.localStage)],
+    ['最后上游事件', r.lastUpstreamEvent || '—'],
+    [
+      '最近进展',
+      r.lastProgressAt
+        ? new Date(r.lastProgressAt).toLocaleTimeString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            hour12: false,
+          })
+        : '—',
+    ],
+    [
+      '临时云端任务',
+      {
+        pending: '等待清理',
+        deleted: '已清理',
+        failed: '清理失败，将自动重试',
+        not_applicable: '本地会话，无云端任务',
+      }[r.cloudSessionCleanup] || '历史记录，未自动清理',
+    ],
+    ['清理错误', r.cloudCleanupError || '—'],
     ['输入 Token', fmt(r.inputTokens)],
     ['输出 Token', fmt(r.outputTokens)],
     ['耗时', r.duration === undefined ? '—' : r.duration + ' ms'],
@@ -901,6 +937,7 @@ document.addEventListener('click', async (e) => {
       await api('settings', {
         gatewayVariant: state.settings.gatewayVariant,
         gatewayMode: document.querySelector('#gateway-mode').value,
+        gatewayCloudMode: true,
         gatewayAccountId: document.querySelector('#gateway-account').value,
         ...(!state.settings.gatewayRunning
           ? { gatewayPort: Number(document.querySelector('#gateway-port').value) }

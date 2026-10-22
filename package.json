@@ -1,6 +1,6 @@
 {
   "name": "trae-switch",
-  "version": "0.8.1",
+  "version": "0.8.6",
   "private": true,
   "description": "Trae / Trae CN 本地账号与用量工作台",
   "type": "module",

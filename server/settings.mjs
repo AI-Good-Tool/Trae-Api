@@ -29,6 +29,10 @@ export function changeApiKey(store, body) {
 export async function updateGatewaySettings(store, gateway, body) {
   const previous = store.data.settings;
   const next = { ...previous, gatewayAccountIds: { ...previous.gatewayAccountIds } };
+  if (body.gatewayCloudMode !== undefined) {
+    if (typeof body.gatewayCloudMode !== 'boolean') throw new Error('云端模式开关无效');
+    next.gatewayCloudMode = body.gatewayCloudMode;
+  }
   if (body.gatewayVariant !== undefined)
     next.gatewayVariant = gatewayRegion(previous, body.gatewayVariant);
   if (body.gatewayAccountId !== undefined) {
@@ -58,6 +62,13 @@ export async function updateGatewaySettings(store, gateway, body) {
     next.gatewayEnabled = body.gatewayEnabled;
   }
   const wasRunning = !!gateway.server;
+  if (next.gatewayCloudMode === false && previous.gatewayCloudMode !== false) {
+    try {
+      await gateway.ensureModelCatalogs?.(next);
+    } catch {
+      throw new Error('本地模型目录刷新失败，通道设置未更改，请检查网络或账号凭证后重试');
+    }
+  }
   store.data.settings = next;
   try {
     if (body.gatewayEnabled !== undefined) {

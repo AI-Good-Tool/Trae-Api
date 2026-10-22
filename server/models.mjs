@@ -1,8 +1,17 @@
 import crypto from 'node:crypto';
-export function modelCatalogView(data) {
+function supportsTransport(data, model) {
+  return (
+    !model.functions?.length ||
+    model.functions.includes(
+      data.settings.gatewayCloudMode === false ? 'solo_agent_lite' : 'solo_agent_remote',
+    )
+  );
+}
+export function modelCatalogView(data, allTransports = false) {
   const rows = new Map();
   for (const a of data.accounts)
     for (const m of a.models || []) {
+      if (!allTransports && !supportsTransport(data, m)) continue;
       const real = m.model || m.id;
       if (!real) continue;
       if (!rows.has(real))
@@ -24,7 +33,7 @@ export function modelCatalogView(data) {
   });
 }
 export function updateModelRule(store, body) {
-  const rows = modelCatalogView(store.data),
+  const rows = modelCatalogView(store.data, true),
     row = rows.find((m) => m.id === body.modelId);
   if (!row) throw new Error('模型不存在，请刷新目录');
   const alias = String(body.alias || '').trim() || row.id;
@@ -72,7 +81,7 @@ export function resolveModel(data, scope, requested) {
       (requested === 'auto' ||
         (row &&
           row.allowedRegions.includes(a.variant) &&
-          (a.models || []).some((m) => (m.model || m.id) === row.id)))
+          (a.models || []).some((m) => (m.model || m.id) === row.id && supportsTransport(data, m))))
     );
   });
   return { row, pool };

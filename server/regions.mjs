@@ -24,6 +24,9 @@ export function regionModels(data, region) {
 
 export function migrateSettings(data) {
   const settings = data.settings;
+  // The experimental local entry is hidden; restore cloud cleanup on upgrade,
+  // including profiles that previously turned it off.
+  settings.gatewayCloudMode = true;
   const legacy = data.accounts.find((a) => a.id === settings.gatewayAccountId);
   settings.gatewayVariant = ['all', ...REGIONS].includes(settings.gatewayVariant)
     ? settings.gatewayVariant

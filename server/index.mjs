@@ -280,6 +280,13 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
     }
   };
   const timer = setInterval(tick, 10 * 60 * 1000);
+  const cleanupTick = () => gateway.retryRemoteCleanup().catch(() => {});
+  const cleanupTimer = setInterval(cleanupTick, 60 * 1000);
+  void gateway
+    .ensureModelCatalogs()
+    .catch(() => store.event('error', '本地模型目录刷新失败，请检查网络或账号凭证后重试'));
+  void cleanupTick();
+  cleanupTimer.unref();
   void tick();
   timer.unref();
   return {
@@ -289,6 +296,7 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
     gateway,
     async close() {
       clearInterval(timer);
+      clearInterval(cleanupTimer);
       login.close();
       await gateway.stop();
       server.closeAllConnections();

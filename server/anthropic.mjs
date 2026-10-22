@@ -120,11 +120,12 @@ export function anthropicReply(res, record, content, stream) {
     res.end(JSON.stringify(message));
     return;
   }
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+  if (!res.headersSent)
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
   const emit = (type, data = {}) =>
     res.write('event: ' + type + '\ndata: ' + JSON.stringify({ type, ...data }) + '\n\n');
   emit('message_start', {

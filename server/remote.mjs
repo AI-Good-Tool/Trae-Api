@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { hostFor } from './client.mjs';
 import { toolPrompt } from './anthropic.mjs';
+import { cleanupRemoteSession } from './remote-cleanup.mjs';
 export async function remoteChat(
   account,
   body,
@@ -44,11 +45,14 @@ export async function remoteChat(
     toolPrompt(body.clientTools || [], body.clientToolChoice);
   const sid = crypto.randomUUID(),
     agent = group.function;
+  signal?.throwIfAborted();
   const session = await checked(
     await fetcher(base + '/chat_sessions', {
       method: 'POST',
       headers,
-      signal,
+      // Keep the create response alive long enough to obtain the ID even if the
+      // caller disconnects, otherwise a created task can become impossible to clean up.
+      signal: AbortSignal.timeout(20000),
       body: JSON.stringify({
         mode: 'code',
         environment_id: 'default',
@@ -80,8 +84,8 @@ export async function remoteChat(
       }),
     }),
   );
-  if (!session.chat_session_id || !session.message_id) throw new Error('upstream_protocol_error');
-  onMetadata({ upstreamSession: session.chat_session_id, upstreamModel: model.name });
+  if (typeof session.chat_session_id !== 'string' || !session.chat_session_id)
+    throw new Error('upstream_protocol_error');
   const url =
     base +
     '/chat_sessions/' +
@@ -91,7 +95,7 @@ export async function remoteChat(
   let finished = false;
   const stop = async () => {
     try {
-      await fetcher(
+      const response = await fetcher(
         base + '/chat_sessions/' + encodeURIComponent(session.chat_session_id) + '/stop',
         {
           method: 'POST',
@@ -103,9 +107,17 @@ export async function remoteChat(
           signal: AbortSignal.timeout(5000),
         },
       );
+      await response.body?.cancel();
     } catch {}
   };
   try {
+    onMetadata({
+      upstreamSession: session.chat_session_id,
+      upstreamModel: model.name,
+      cloudSessionCleanup: 'pending',
+    });
+    if (!session.message_id) throw new Error('upstream_protocol_error');
+    signal?.throwIfAborted();
     const response = await fetcher(url, { headers, signal });
     if (!response.ok) {
       await response.body?.cancel();
@@ -154,5 +166,7 @@ export async function remoteChat(
     );
   } finally {
     if (!finished) await stop();
+    const cleanup = await cleanupRemoteSession(account, session.chat_session_id, { fetcher, host });
+    onMetadata({ ...cleanup, cloudCleanupAt: new Date().toISOString() });
   }
 }

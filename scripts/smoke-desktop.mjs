@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { systemCommandEnv } from '../server/platform.mjs';
+import { Store } from '../server/store.mjs';
 const manifest = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const base = path.resolve(
   'dist',
@@ -19,6 +20,9 @@ const executable =
         'Trae Switch.app/Contents/MacOS/Trae Switch',
       ));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trae-desktop-smoke-'));
+const legacyStore = new Store(path.join(dir, 'vault'));
+legacyStore.data.settings.gatewayCloudMode = false;
+legacyStore.save();
 const { stdout, stderr } = await promisify(execFile)(executable, [], {
   env: {
     ...systemCommandEnv(),

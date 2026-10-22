@@ -139,6 +139,10 @@ async function boot() {
     );
     if (!chartLayout)
       throw new Error('Request chart is missing or overflows the packaged renderer');
+    const modeSwitch = await win.webContents.executeJavaScript(
+      `(async()=>{document.querySelector('[data-page="gateway"]').click();if(document.querySelector('#gateway-cloud-mode')||document.body.textContent.includes('关闭后通过独立的'))return false;const before=await(await fetch('/api/state')).json();if(before.settings.gatewayCloudMode!==true)return false;document.querySelector('[data-action="save-gateway"]').click();const deadline=Date.now()+4000;while(Date.now()<deadline){if(document.body.textContent.includes('反代配置已保存')){const state=await(await fetch('/api/state')).json();return state.settings.gatewayCloudMode===true;}await new Promise(r=>setTimeout(r,50));}return false;})()`,
+    );
+    if (!modeSwitch) throw new Error('Gateway cloud default or hidden mode entry failed');
     const bridge = await win.webContents.executeJavaScript(
       `window.desktopUpdates.state().then(s => ({ version: s.currentVersion, status: s.status }))`,
     );

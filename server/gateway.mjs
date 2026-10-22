@@ -1,5 +1,8 @@
 import { anthropicRequest, anthropicReply, parseToolReply } from './anthropic.mjs';
 import { remoteChat } from './remote.mjs';
+import { cleanupRemoteSession } from './remote-cleanup.mjs';
+import { localChat } from './local.mjs';
+import { LocalRuntimes } from './local-runtime.mjs';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { hostFor, profile } from './client.mjs';
@@ -27,7 +30,7 @@ export function nativeHeaders(a) {
 export async function modelCatalog(a) {
   const response = await fetch(
     hostFor(a, 'agent') +
-      '/api/remote/v1/models?functions=solo_agent_remote%2Csolo_work_remote&show_custom_model=true',
+      '/api/remote/v1/models?functions=solo_agent_remote%2Csolo_agent_lite&show_custom_model=true',
     {
       headers: {
         Authorization: 'Cloud-IDE-JWT ' + a.user.token,
@@ -43,9 +46,10 @@ export async function modelCatalog(a) {
   if (!Array.isArray(result.data?.list)) throw new Error('官方 Remote 模型目录格式变化');
   const models = new Map();
   for (const group of result.data.list) {
-    if (group.function !== 'solo_agent_remote') continue;
+    if (!['solo_agent_remote', 'solo_agent_lite'].includes(group.function)) continue;
     for (const m of group.models || []) {
       if (typeof m.name !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(m.name)) continue;
+      const previous = models.get(m.name);
       models.set(m.name, {
         id: m.name,
         name: m.display_name || m.name,
@@ -53,12 +57,13 @@ export async function modelCatalog(a) {
         source: m.config_source || 1,
         catalogSource: 'remote-api',
         remote: true,
-        functions: [group.function],
+        functions: [...new Set([...(previous?.functions || []), group.function])],
       });
     }
   }
   if (!models.size) throw new Error('当前账号没有可用的 Remote Agent 模型');
   a.models = [...models.values()];
+  a.modelCatalogVersion = 2;
   return a.models;
 }
 export async function readBody(req) {
@@ -166,6 +171,9 @@ export class Gateway {
       headers = nativeHeaders,
       host = hostFor,
       remoteTransport = upstreamFetch === fetch ? remoteChat : null,
+      localTransport = localChat,
+      localRuntimes = new LocalRuntimes(store.dir),
+      catalogFetcher = modelCatalog,
     } = {},
   ) {
     this.store = store;
@@ -174,9 +182,86 @@ export class Gateway {
     this.active = new Map();
     this.upstreamFetch = upstreamFetch;
     this.remoteTransport = remoteTransport;
+    this.localTransport = localTransport;
+    this.localRuntimes = localRuntimes;
+    this.catalogFetcher = catalogFetcher;
+    this.catalogRefreshes = new Map();
     this.headers = headers;
     this.host = host;
     this.starting = null;
+  }
+
+  async ensureModelCatalogs(
+    settings = this.store.data.settings,
+    scope = settings.gatewayVariant || 'all',
+  ) {
+    if (settings.gatewayCloudMode !== false) return;
+    const accounts = this.store.data.accounts.filter((a) => {
+      const pin = settings.gatewayAccountIds?.[scope === 'all' ? 'all' : a.variant];
+      return (
+        (scope === 'all' || a.variant === scope) &&
+        (!pin || pin === a.id) &&
+        a.enabled !== false &&
+        Date.parse(a.user.expiredAt) > Date.now() &&
+        a.modelCatalogVersion !== 2 &&
+        a.models?.some((m) => m.catalogSource === 'remote-api')
+      );
+    });
+    const results = await Promise.allSettled(
+      accounts.map(async (a) => {
+        let pending = this.catalogRefreshes.get(a.id);
+        if (!pending) {
+          // Refresh a copy so failures never replace a usable catalog with partial data.
+          pending = this.catalogFetcher({ ...a }).finally(() => this.catalogRefreshes.delete(a.id));
+          this.catalogRefreshes.set(a.id, pending);
+        }
+        return await pending;
+      }),
+    );
+    if (results.some((r) => r.status === 'rejected'))
+      throw new Error('local_catalog_refresh_failed');
+    if (!accounts.length) return;
+    const previous = accounts.map((a) => ({
+      models: a.models,
+      modelCatalogVersion: a.modelCatalogVersion,
+    }));
+    try {
+      accounts.forEach((a, i) => {
+        if (!this.store.data.accounts.includes(a)) return;
+        a.models = results[i].value;
+        a.modelCatalogVersion = 2;
+      });
+      this.store.save();
+    } catch (error) {
+      accounts.forEach((a, i) => Object.assign(a, previous[i]));
+      throw error;
+    }
+  }
+
+  async retryRemoteCleanup() {
+    if (this.cleanupBusy) return;
+    this.cleanupBusy = true;
+    try {
+      // Legacy cloud sessions have no cleanup marker and must never be touched.
+      const records = this.store.data.requests.filter(
+        (r) =>
+          r.status !== 'pending' &&
+          r.upstreamSession &&
+          ['pending', 'failed'].includes(r.cloudSessionCleanup),
+      );
+      for (const record of records) {
+        const account = this.store.data.accounts.find((a) => a.id === record.accountId);
+        if (!account) continue;
+        const result = await cleanupRemoteSession(account, record.upstreamSession, {
+          fetcher: this.upstreamFetch,
+          host: this.host,
+        });
+        Object.assign(record, result, { cloudCleanupAt: new Date().toISOString() });
+        this.store.save();
+      }
+    } finally {
+      this.cleanupBusy = false;
+    }
   }
 
   async start() {
@@ -210,10 +295,14 @@ export class Gateway {
         await this.starting;
       } catch {}
     const server = this.server;
-    if (!server) return;
+    if (!server) {
+      await this.localRuntimes.close();
+      return;
+    }
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     this.server = null;
+    await this.localRuntimes.close();
   }
 
   async handle(req, res) {
@@ -265,7 +354,7 @@ export class Gateway {
         error: { message, type: status < 500 ? 'invalid_request_error' : 'api_error', code },
       });
     };
-    let controller, timer, reservedAccount;
+    let controller, timer, heartbeat, reservedAccount;
     try {
       const expected = Buffer.from(`Bearer ${this.store.data.settings.apiKey}`),
         actual = Buffer.from(
@@ -286,7 +375,8 @@ export class Gateway {
           '上游没有可靠的 Token 计数接口，请关闭客户端预估计数',
           'token_count_unavailable',
         );
-      if (route[2] === 'models' && req.method === 'GET')
+      if (route[2] === 'models' && req.method === 'GET') {
+        await this.ensureModelCatalogs(this.store.data.settings, region);
         return json(res, 200, {
           object: 'list',
           data: [
@@ -300,6 +390,7 @@ export class Gateway {
             owned_by: region === 'all' ? 'trae' : region === 'cn' ? 'trae-cn' : 'trae-intl',
           })),
         });
+      }
       if (!isChat) return fail(405, '请求方法不支持', 'method_not_allowed');
       let body, payload;
       try {
@@ -338,6 +429,16 @@ export class Gateway {
       record.protocol = isMessages ? 'Messages' : 'Chat Completions';
       record.model = body.model || 'auto';
       record.stream = !!body.stream;
+      const isLocal = this.store.data.settings.gatewayCloudMode === false;
+      record.transport = isLocal ? 'Local' : 'Remote';
+      controller = new AbortController();
+      timer = setTimeout(
+        () => controller.abort(new Error('request_timeout')),
+        isLocal ? 600000 : 90000,
+      );
+      res.on('close', () => controller.abort());
+      await this.ensureModelCatalogs(this.store.data.settings, region);
+      controller.signal.throwIfAborted();
       const eligible = resolveModel(this.store.data, region, 'auto').pool;
       if (!eligible.length)
         return fail(503, '当前地区没有可用账号，请添加账号或刷新凭证', 'no_account');
@@ -375,22 +476,41 @@ export class Gateway {
       if (config) payload.model = config.id;
       record.accountId = account.id;
       record.accountName = account.note || account.user.account.username || '未命名账号';
-      controller = new AbortController();
-      timer = setTimeout(() => controller.abort(), 90000);
-      res.on('close', () => controller.abort());
-      const response = this.remoteTransport
-        ? await this.remoteTransport(account, body, config?.id || 'auto', {
+      record.transport = isLocal ? 'Local' : 'Remote';
+      const transport = isLocal ? this.localTransport : this.remoteTransport;
+      if (isLocal && !transport) throw new Error('local_ipc_unavailable');
+      if (isLocal && body.stream)
+        heartbeat = setInterval(() => {
+          if (res.destroyed || res.writableEnded) return;
+          if (!res.headersSent)
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive',
+            });
+          res.write(isMessages ? 'event: ping\ndata: {"type":"ping"}\n\n' : ': ping\n\n');
+        }, 10000);
+      const response = transport
+        ? await transport(account, body, config?.id || 'auto', {
+            runtimes: this.localRuntimes,
+            fetcher: this.upstreamFetch,
+            host: this.host,
             signal: controller.signal,
             events: sseEvents,
-            onMetadata: (metadata) =>
+            onMetadata: (metadata) => {
               Object.assign(
                 record,
                 metadata,
-                { transport: 'Remote' },
+                { transport: isLocal ? 'Local' : 'Remote' },
                 config
                   ? {}
-                  : { realModel: metadata.upstreamModel, modelConfig: metadata.upstreamModel },
-              ),
+                  : metadata.upstreamModel
+                    ? { realModel: metadata.upstreamModel, modelConfig: metadata.upstreamModel }
+                    : {},
+              );
+              // Persist ownership before consuming SSE so restart recovery only deletes our tasks.
+              this.store.save();
+            },
           })
         : await this.upstreamFetch(this.host(account, 'agent') + '/api/agent/v3/llm_utils_chat', {
             method: 'POST',
@@ -477,6 +597,25 @@ export class Gateway {
       record.status = 'success';
     } catch (error) {
       const messages = {
+        local_catalog_refresh_failed:
+          '本地模型目录刷新失败，请检查网络或账号凭证后重试；未回退云端',
+        local_client_missing: '本地模式需要安装对应地区的 Trae 客户端',
+        local_ipc_unavailable: '当前 Trae 客户端不支持本地 IPC 通道',
+        local_runtime_closed: 'Trae 本地运行实例已退出，请重试',
+        local_runtime_timeout: 'Trae 本地运行实例启动或响应超时',
+        local_request_timeout: 'Trae 本地请求超时',
+        local_bridge_error: 'Trae 本地桥接调用失败，请确认客户端版本受支持',
+        local_debugger_error: 'Trae 本地私有管道调用失败',
+        local_rpc_error: 'Trae 本地服务拒绝请求',
+        local_database_busy: 'Trae 本地会话数据库正忙，请稍后重试',
+        local_business_error: 'Trae 本地会话创建失败',
+        local_model_unavailable: '当前账号的本地 Agent 不支持此模型，请刷新模型目录',
+        local_protocol_error: 'Trae 本地会话协议异常',
+        local_stream_error: 'Trae 本地回复流异常',
+        local_stream_lost: 'Trae 本地窗口重新初始化，回复通道已丢失，请重试本次请求',
+        local_stream_idle: 'Trae 本地通道连续两分钟没有收到事件，已停止等待，请重试',
+        local_session_stopped: 'Trae 本地任务已取消或失败，已停止等待，请重试',
+        local_tool_execution: '本地 Agent 请求执行内置工具，已停止；反代工具由调用客户端执行',
         upstream_business_error: '上游拒绝请求',
         remote_model_unavailable:
           '当前账号的官方 Remote 模型目录不提供此模型，请刷新目录并选择当前可用名称',
@@ -491,13 +630,24 @@ export class Gateway {
         truncated_stream: '上游流意外中断',
       };
       const aborted = controller?.signal.aborted;
-      const message = aborted ? '请求已取消或超时' : messages[error.message] || '上游请求失败';
+      const timedOut = controller?.signal.reason?.message === 'request_timeout';
+      const message = timedOut
+        ? '请求超过最长处理时间'
+        : aborted
+          ? '请求已取消'
+          : messages[error.message] || '上游请求失败';
       const code =
         record?.errorCode ||
-        (aborted ? 'request_aborted' : messages[error.message] ? error.message : 'upstream_error');
+        (timedOut
+          ? 'request_timeout'
+          : aborted
+            ? 'request_aborted'
+            : messages[error.message]
+              ? error.message
+              : 'upstream_error');
       if (record)
         Object.assign(record, {
-          status: aborted ? 'cancelled' : 'error',
+          status: aborted && !timedOut ? 'cancelled' : 'error',
           error: message,
           errorCode: code,
         });
@@ -508,12 +658,17 @@ export class Gateway {
             error: { message: `${message} (${code})`, type: 'api_error', code },
           });
         else {
-          res.write(`data: ${JSON.stringify({ error: { message, code } })}\n\n`);
+          res.write(
+            isMessages
+              ? `event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: `${message} (${code})` } })}\n\n`
+              : `data: ${JSON.stringify({ error: { message, code } })}\n\n`,
+          );
           res.end();
         }
       }
     } finally {
       clearTimeout(timer);
+      clearInterval(heartbeat);
       controller?.abort();
       if (reservedAccount) {
         const n = (this.active.get(reservedAccount) || 1) - 1;
