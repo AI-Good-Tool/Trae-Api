@@ -56,3 +56,12 @@
 5. SQLCipher 会话库解密和官方逐会话用量接口；目前不读取会话正文来估算 Token。
 
 验证命令：`npm test`、`npm run inspect -- --live`。测试包含登录态完整性、账号库加密及篡改检测、公开数据脱敏、SSE 分块、输入协议约束、工作台与网关访问控制。
+
+
+## 2026-10-22 Remote / Claude Code 更新
+
+已用官方 /api/remote/v1/models 与 chat_sessions + events 打通国内 deepseek-v4.1-flash，模型配置由官方目录完整绑定，model_config 确认实际模型，finish summary 与 completed 终态确认完成。旧 raw/FastApply 路径的结论仍作为历史研究保留，不再用它驱动生产请求。Messages、客户端工具往返和最终打包应用均完成 CC GUI 实测，详情见 REVIEW-0.4.1.md。国际版和其他模型不在本次真实验证范围。
+
+## 0.6.1 客户端索引读取补充
+
+已发现客户端 renderer.log 中结构化本地会话／项目事件和 Session fetched 数据可提供真实 chat_session_id、user_id、local_project_id 及项目目录。该路径可只读建立原生会话索引，不需要手工输入会话标题或将导入副本标为客户端来源。当前本机读得国内 3 条、国际 1 条，与客户端可见标题／分组核对。仅在客户端被观察到的远端默认任务也应保留，以符合客户端显示；未观察到的其他 API 会话不混入。日志覆盖并不保证完整历史，消息正文的加密读取仍未解决。

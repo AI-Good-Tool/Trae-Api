@@ -1,0 +1,61 @@
+name: Build desktop apps
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: Windows-x64
+            build: build:windows
+            folder: windows
+          - runner: macos-15
+            target: macOS-arm64
+            build: build:mac
+            folder: mac
+          - runner: macos-15-intel
+            target: macOS-x64
+            build: build:mac
+            folder: mac
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --registry=https://registry.npmjs.org
+      - run: npm test
+      - run: npm run format:check
+      - name: Install NSIS when needed
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nsisCompiler = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (!(Test-Path $nsisCompiler)) {
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed" }
+          }
+      - run: npm run ${{ matrix.build }}
+      - run: npm run smoke:desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Trae-Switch-${{ matrix.target }}
+          path: |
+            dist/${{ matrix.folder }}-*/*.dmg
+            dist/${{ matrix.folder }}-*/*.exe
+            dist/${{ matrix.folder }}-*/*.zip
+            dist/${{ matrix.folder }}-*/*.sha256
+          if-no-files-found: error
+          retention-days: 14

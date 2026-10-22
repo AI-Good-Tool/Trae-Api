@@ -1,7 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import os from 'node:os';
-import { execFile } from 'node:child_process';
+import { openExternal } from './platform.mjs';
 import { profile, readLocal, hostFor } from './client.mjs';
 import { request } from './api.mjs';
 
@@ -177,7 +177,14 @@ export class Login {
       code_challenge_method: 'S256',
     }))
       u.searchParams.set(k, v);
-    execFile('/usr/bin/open', [u.href]);
+    try {
+      await openExternal(u.href);
+    } catch {
+      clearTimeout(timer);
+      server.close();
+      this.pending.delete(variant);
+      throw new Error('无法打开浏览器，请检查默认浏览器配置后重试');
+    }
     return { status: 'waiting', expiresIn: 300 };
   }
   close() {

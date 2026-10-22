@@ -1,15 +1,20 @@
 const { app, BrowserWindow, shell, dialog, Menu } = require('electron');
 const path = require('node:path');
 const version = require('./package.json').version;
+const smoke = process.env.TRAE_SWITCH_SMOKE_TEST === '1';
 app.setName('Trae Switch');
-app.setPath('userData', path.join(app.getPath('appData'), 'Trae Switch'));
+app.setPath(
+  'userData',
+  smoke ? process.env.TRAE_SWITCH_SMOKE_PROFILE : path.join(app.getPath('appData'), 'Trae Switch'),
+);
+if (smoke) app.commandLine.appendSwitch('disable-gpu');
 let service, window;
 
 async function boot() {
   const { start } = await import('./server/index.mjs');
   let url;
   try {
-    service = await start(19827);
+    service = await start(smoke ? 0 : 19827);
     url = service.url;
   } catch (error) {
     if (error.code !== 'EADDRINUSE') throw error;
@@ -22,6 +27,7 @@ async function boot() {
   const icon = path.join(__dirname, 'ui', 'icon.png');
   if (process.platform === 'darwin') app.dock.setIcon(icon);
   const win = (window = new BrowserWindow({
+    show: !smoke,
     width: 1440,
     height: 960,
     minWidth: 1080,
@@ -62,6 +68,16 @@ async function boot() {
     ]),
   );
   await win.loadURL(url);
+  if (smoke) {
+    const ok = await win.webContents.executeJavaScript(
+      `new Promise((resolve,reject)=>{const deadline=Date.now()+8000;const check=()=>{if(document.querySelector('nav')&&document.querySelector('h1'))resolve(!document.querySelector('[data-page="sessions"]'));else if(Date.now()>deadline)reject(new Error('Renderer failed to load'));else setTimeout(check,50);};check();})`,
+    );
+    if (!ok) throw new Error('Hidden session entry unexpectedly visible');
+    await service.close();
+    service = null;
+    console.log('TRAE_DESKTOP_SMOKE_OK ' + version);
+    app.quit();
+  }
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
@@ -73,6 +89,11 @@ else {
     .whenReady()
     .then(boot)
     .catch((error) => {
+      if (smoke) {
+        console.error(error);
+        app.exit(1);
+        return;
+      }
       dialog.showErrorBox('Trae Switch 启动失败', error.message);
       app.quit();
     });

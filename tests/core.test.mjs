@@ -32,7 +32,7 @@ test('账号库加密持久化，公开对象不含凭证', () => {
   assert.equal(fs.readFileSync(s.file).includes(Buffer.from(user.token)), false);
   assert.equal(new Store(dir).data.accounts[0].user.token, user.token);
   assert.equal(JSON.stringify(publicAccount(s.data.accounts[0])).includes(user.token), false);
-  assert.equal(fs.statSync(s.file).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(s.file).mode & 0o777, 0o600);
   const raw = fs.readFileSync(s.file);
   raw[30] ^= 1;
   fs.writeFileSync(s.file, raw);

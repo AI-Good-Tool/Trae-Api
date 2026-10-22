@@ -12,6 +12,7 @@ import { changeApiKey, updateGatewaySettings } from './settings.mjs';
 
 import { modelCatalogView, updateModelRule } from './models.mjs';
 import { Checkins, checkedToday } from './checkin.mjs';
+import { Sessions } from './sessions.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export async function start(port = Number(process.env.PORT || 19827), store = new Store()) {
@@ -20,6 +21,7 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
     session = crypto.randomBytes(32).toString('hex');
   const busy = new Set();
   const checkins = new Checkins(store);
+  const sessions = new Sessions(store);
   async function exclusive(id, fn) {
     if (busy.has(id)) throw new Error('该账号正在操作，请稍后重试');
     busy.add(id);
@@ -50,7 +52,14 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
           return json(res, 403, { error: '来源不允许' });
         const body = req.method === 'POST' ? await readBody(req) : {};
         let result;
-        if (req.method === 'GET' && url.pathname === '/api/state') {
+        if (req.method === 'GET' && url.pathname === '/api/sessions') {
+          result = sessions.list({
+            variant: url.searchParams.get('variant') || 'all',
+            query: url.searchParams.get('query') || '',
+            archived: url.searchParams.get('archived') === 'true',
+            offset: Math.max(0, Number(url.searchParams.get('offset')) || 0),
+          });
+        } else if (req.method === 'GET' && url.pathname === '/api/state') {
           const clients = Object.keys(variants).map((variant) => {
             try {
               const p = profile(variant);
@@ -61,7 +70,10 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
           });
           const { apiKey, ...settings } = store.data.settings;
           result = {
-            accounts: store.data.accounts.map(publicAccount),
+            accounts: store.data.accounts.map((a) => ({
+              ...publicAccount(a),
+              activeRequests: gateway.active.get(a.id) || 0,
+            })),
             events: store.data.events,
             requests: store.data.requests,
             modelCatalog: modelCatalogView(store.data),
@@ -77,8 +89,24 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
           };
         } else if (req.method === 'POST') {
           const id = body.id,
-            a = id ? store.account(id) : null;
+            a = id && !url.pathname.startsWith('/api/sessions/') ? store.account(id) : null;
           switch (url.pathname) {
+            case '/api/sessions/refresh':
+              result = sessions.list({ variant: body.variant || 'all', query: body.query || '' });
+              break;
+            case '/api/sessions/sync':
+              return json(res, 410, { error: '会话管理仅收录客户端会话，云端同步入口已停用' });
+            case '/api/sessions/detail':
+              result = await exclusive('session:' + id, () =>
+                sessions.detail(id, { refresh: body.refresh === true }),
+              );
+              break;
+            case '/api/sessions/import':
+              result = sessions.import(body);
+              break;
+            case '/api/sessions/update':
+              result = sessions.update(id, body);
+              break;
             case '/api/capture': {
               const v = body.variant;
               if (!variants[v]) throw new Error('请选择客户端版本');
@@ -91,7 +119,7 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
               result = await login.start(body.variant);
               break;
             case '/api/launch':
-              launch(body.variant);
+              await launch(body.variant);
               result = { ok: true };
               break;
             case '/api/refresh':
@@ -119,6 +147,17 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
               });
               break;
             case '/api/account':
+              if (body.enabled !== undefined && typeof body.enabled !== 'boolean')
+                throw new Error('反代开关无效');
+              if (
+                body.concurrencyLimit !== undefined &&
+                (!Number.isInteger(body.concurrencyLimit) ||
+                  body.concurrencyLimit < 1 ||
+                  body.concurrencyLimit > 32)
+              )
+                throw new Error('并发数须为 1–32 的整数');
+              if (typeof body.enabled === 'boolean') a.enabled = body.enabled;
+              if (body.concurrencyLimit !== undefined) a.concurrencyLimit = body.concurrencyLimit;
               if (typeof body.note === 'string') a.note = body.note.slice(0, 120);
               if (typeof body.autoCheckin === 'boolean')
                 a.autoCheckin = a.variant === 'cn' && body.autoCheckin;
@@ -126,7 +165,9 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
               result = publicAccount(a);
               break;
             case '/api/switch':
-              result = await exclusive(id, () => switchAccount(a, path.join(store.dir, 'backups')));
+              result = await exclusive('switch:' + a.variant, () =>
+                exclusive(id, () => switchAccount(a, path.join(store.dir, 'backups'))),
+              );
               store.event('switch', `${variants[a.variant]} 账号已切换，原始存储已备份`);
               break;
             case '/api/models':
@@ -186,7 +227,7 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
             : file.endsWith('.css')
               ? 'text/css'
               : 'text/html; charset=utf-8',
-        'X-Trae-Switch': '0.3.2',
+        'X-Trae-Switch': '0.7.0',
         'Set-Cookie': `trae_session=${session}; HttpOnly; SameSite=Strict; Path=/`,
         'Content-Security-Policy':
           "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'",

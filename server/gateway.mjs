@@ -1,3 +1,5 @@
+import { anthropicRequest, anthropicReply, parseToolReply } from './anthropic.mjs';
+import { remoteChat } from './remote.mjs';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { hostFor, profile } from './client.mjs';
@@ -23,22 +25,40 @@ export function nativeHeaders(a) {
   };
 }
 export async function modelCatalog(a) {
-  const r = await fetch(hostFor(a, 'agent') + '/api/ide/v1/get_detail_param', {
-    method: 'POST',
-    headers: nativeHeaders(a),
-    body: JSON.stringify({ function: 'chat_v3', need_prompt: false, poly_prompt: true }),
-    signal: AbortSignal.timeout(20000),
-  });
-  const j = await r.json();
-  if (!r.ok || j.code) throw new Error(`模型目录请求失败：${r.status}/${j.code || ''}`);
-  const models = (j.config_info_list || []).map((c) => ({
-    id: c.config_name,
-    name: c.display_config?.display_name || c.config_name,
-    model: c.model_detail_list?.[0]?.model_name || c.config_name,
-    source: c.config_source || 1,
-    catalogSource: 'native-api',
-  }));
-  a.models = [...(a.models || []).filter((m) => !models.some((x) => x.id === m.id)), ...models];
+  const response = await fetch(
+    hostFor(a, 'agent') +
+      '/api/remote/v1/models?functions=solo_agent_remote%2Csolo_work_remote&show_custom_model=true',
+    {
+      headers: {
+        Authorization: 'Cloud-IDE-JWT ' + a.user.token,
+        'X-Trae-Client-Type': 'web',
+        'x-user-region': a.variant === 'cn' ? 'CN' : 'SG',
+      },
+      signal: AbortSignal.timeout(20000),
+      redirect: 'error',
+    },
+  );
+  const result = await response.json();
+  if (!response.ok || result.code) throw new Error('官方 Remote 模型目录查询失败');
+  if (!Array.isArray(result.data?.list)) throw new Error('官方 Remote 模型目录格式变化');
+  const models = new Map();
+  for (const group of result.data.list) {
+    if (group.function !== 'solo_agent_remote') continue;
+    for (const m of group.models || []) {
+      if (typeof m.name !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(m.name)) continue;
+      models.set(m.name, {
+        id: m.name,
+        name: m.display_name || m.name,
+        model: m.name,
+        source: m.config_source || 1,
+        catalogSource: 'remote-api',
+        remote: true,
+        functions: [group.function],
+      });
+    }
+  }
+  if (!models.size) throw new Error('当前账号没有可用的 Remote Agent 模型');
+  a.models = [...models.values()];
   return a.models;
 }
 export async function readBody(req) {
@@ -139,11 +159,21 @@ export function nativeBody(body) {
   };
 }
 export class Gateway {
-  constructor(store, { upstreamFetch = fetch, headers = nativeHeaders, host = hostFor } = {}) {
+  constructor(
+    store,
+    {
+      upstreamFetch = fetch,
+      headers = nativeHeaders,
+      host = hostFor,
+      remoteTransport = upstreamFetch === fetch ? remoteChat : null,
+    } = {},
+  ) {
     this.store = store;
     this.server = null;
     this.cursor = { cn: 0, intl: 0 };
+    this.active = new Map();
     this.upstreamFetch = upstreamFetch;
+    this.remoteTransport = remoteTransport;
     this.headers = headers;
     this.host = host;
     this.starting = null;
@@ -188,23 +218,25 @@ export class Gateway {
 
   async handle(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
-    const route = url.pathname.match(/^\/(?:(cn|intl)\/)?v1\/(models|chat\/completions)$/);
-    if (!route)
-      return json(res, 404, { error: { message: '支持 /cn/v1、/intl/v1 和默认 /v1 接口' } });
-    const region = gatewayRegion(this.store.data.settings, route[1]);
-    const isChat = route[2] === 'chat/completions' && req.method === 'POST';
+    const route = url.pathname.match(
+      /^\/(?:(cn|intl)\/)?v1\/(?:v1\/)?(models|chat\/completions|messages|messages\/count_tokens)$/,
+    );
+    const region = gatewayRegion(this.store.data.settings, route?.[1]);
+    const isMessages = route?.[2] === 'messages' || route?.[2] === 'messages/count_tokens';
+    const isCount = route?.[2] === 'messages/count_tokens';
+    const isChat = ['chat/completions', 'messages'].includes(route?.[2]) && req.method === 'POST';
     const started = Date.now();
     const id = `chatcmpl-${crypto.randomUUID()}`;
-    const record = isChat
+    const record = !(route?.[2] === 'models' && req.method === 'GET')
       ? {
           id,
           time: new Date().toISOString(),
           method: req.method,
-          path: url.pathname,
+          path: url.pathname.slice(0, 256),
           variant: region,
           accountId: null,
           accountName: null,
-          protocol: 'Chat Completions',
+          protocol: isMessages ? 'Messages' : 'HTTP',
           stream: false,
           model: null,
           status: 'pending',
@@ -217,6 +249,7 @@ export class Gateway {
     if (record) {
       this.store.data.requests.unshift(record);
       this.store.data.requests = this.store.data.requests.slice(0, 1000);
+      this.store.save();
     }
     res.setHeader('X-Request-ID', id);
     const fail = (status, message, code) => {
@@ -228,15 +261,31 @@ export class Gateway {
           httpStatus: status,
         });
       json(res, status, {
-        error: { message, type: status < 500 ? 'invalid_request_error' : 'upstream_error', code },
+        ...(isMessages ? { type: 'error', request_id: id } : {}),
+        error: { message, type: status < 500 ? 'invalid_request_error' : 'api_error', code },
       });
     };
-    let controller, timer;
+    let controller, timer, reservedAccount;
     try {
       const expected = Buffer.from(`Bearer ${this.store.data.settings.apiKey}`),
-        actual = Buffer.from(req.headers.authorization || '');
+        actual = Buffer.from(
+          req.headers.authorization ||
+            (req.headers['x-api-key'] ? 'Bearer ' + req.headers['x-api-key'] : ''),
+        );
       if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected))
         return fail(401, 'API Key 无效', 'unauthorized');
+      if (!route)
+        return fail(
+          404,
+          '接口不存在：支持 /v1/messages、/v1/chat/completions 和 /v1/models',
+          'route_not_found',
+        );
+      if (isCount)
+        return fail(
+          501,
+          '上游没有可靠的 Token 计数接口，请关闭客户端预估计数',
+          'token_count_unavailable',
+        );
       if (route[2] === 'models' && req.method === 'GET')
         return json(res, 200, {
           object: 'list',
@@ -251,18 +300,42 @@ export class Gateway {
             owned_by: region === 'all' ? 'trae' : region === 'cn' ? 'trae-cn' : 'trae-intl',
           })),
         });
-      if (!isChat) return json(res, 405, { error: { message: '请求方法不支持' } });
+      if (!isChat) return fail(405, '请求方法不支持', 'method_not_allowed');
       let body, payload;
       try {
         body = await readBody(req);
+        if (record) {
+          record.model = typeof body.model === 'string' ? body.model.slice(0, 128) : null;
+          record.stream = body.stream === true;
+        }
+        if (isMessages) body = anthropicRequest(body);
         payload = nativeBody(body);
-      } catch {
-        return fail(
-          400,
-          '请求参数无效：请使用有效的模型名称、文本 messages 和布尔 stream',
-          'invalid_request',
-        );
+      } catch (error) {
+        const allowed = [
+          '请求超过 2MB',
+          '请求 JSON 格式无效',
+          '模型名称无效',
+          'stream 必须是布尔值',
+          'max_tokens 须为 1–128000 的整数',
+          'messages 不能为空',
+          '当前反代仅验证文本对话，暂不支持工具调用',
+          'messages 中包含无效消息',
+          '当前只支持文本对话角色',
+          '当前只支持纯文本 content',
+          '消息内容无效',
+          'messages 无效',
+          'max_tokens 无效',
+          '工具定义无效',
+          'tool_choice 无效',
+          '指定工具不存在',
+          '当前 Messages 接口只支持文本及客户端工具块',
+        ];
+        const detail = allowed.includes(error.message)
+          ? error.message
+          : '请使用有效的模型名称、文本 messages 和布尔 stream';
+        return fail(400, '请求参数无效：' + detail, 'invalid_request');
       }
+      record.protocol = isMessages ? 'Messages' : 'Chat Completions';
       record.model = body.model || 'auto';
       record.stream = !!body.stream;
       const eligible = resolveModel(this.store.data, region, 'auto').pool;
@@ -276,7 +349,21 @@ export class Gateway {
           'model_not_available',
         );
       const mode = this.store.data.settings.gatewayMode || 'round-robin';
-      const account = chooseAccount(pool, mode, this.cursor, region + ':' + (row?.id || 'auto'));
+      const available = pool.filter(
+        (a) => (this.active.get(a.id) || 0) < (a.concurrencyLimit || 4),
+      );
+      if (!available.length) {
+        res.setHeader('Retry-After', '1');
+        return fail(429, '可用账号并发已满，请稍后重试', 'account_busy');
+      }
+      const account = chooseAccount(
+        available,
+        mode,
+        this.cursor,
+        region + ':' + (row?.id || 'auto'),
+      );
+      reservedAccount = account.id;
+      this.active.set(account.id, (this.active.get(account.id) || 0) + 1);
       const config = row && account.models.find((m) => (m.model || m.id) === row.id);
       record.requestedModel = record.model;
       record.model = row?.alias || 'auto';
@@ -291,16 +378,27 @@ export class Gateway {
       controller = new AbortController();
       timer = setTimeout(() => controller.abort(), 90000);
       res.on('close', () => controller.abort());
-      const response = await this.upstreamFetch(
-        this.host(account, 'agent') + '/api/agent/v3/llm_utils_chat',
-        {
-          method: 'POST',
-          headers: this.headers(account),
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-          redirect: 'error',
-        },
-      );
+      const response = this.remoteTransport
+        ? await this.remoteTransport(account, body, config?.id || 'auto', {
+            signal: controller.signal,
+            events: sseEvents,
+            onMetadata: (metadata) =>
+              Object.assign(
+                record,
+                metadata,
+                { transport: 'Remote' },
+                config
+                  ? {}
+                  : { realModel: metadata.upstreamModel, modelConfig: metadata.upstreamModel },
+              ),
+          })
+        : await this.upstreamFetch(this.host(account, 'agent') + '/api/agent/v3/llm_utils_chat', {
+            method: 'POST',
+            headers: this.headers(account),
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+            redirect: 'error',
+          });
       record.upstreamStatus = response.status;
       if (!response.ok) return fail(502, `上游 HTTP ${response.status}`, 'upstream_http_error');
       if (!response.headers.get('content-type')?.includes('text/event-stream'))
@@ -339,7 +437,7 @@ export class Gateway {
           text += delta;
           if (text.length > 1024 * 1024) throw new Error('output_limit');
           if (text.length > 2048 && !text.slice(-2048).trim()) throw new Error('blank_output');
-          if (body.stream) emit({ content: delta });
+          if (body.stream && !isMessages) emit({ content: delta });
         }
         const usage = data.usage;
         if (usage) {
@@ -351,7 +449,10 @@ export class Gateway {
       }
       if (!gotOutput) throw new Error('empty_output');
       if (!done) throw new Error('truncated_stream');
-      if (body.stream) {
+      if (isMessages) {
+        const content = parseToolReply(text, body.clientTools || [], body.clientToolChoice);
+        anthropicReply(res, record, content, body.stream);
+      } else if (body.stream) {
         emit({}, 'stop');
         res.end('data: [DONE]\n\n');
       } else
@@ -377,6 +478,12 @@ export class Gateway {
     } catch (error) {
       const messages = {
         upstream_business_error: '上游拒绝请求',
+        remote_model_unavailable:
+          '当前账号的官方 Remote 模型目录不提供此模型，请刷新目录并选择当前可用名称',
+        invalid_tool_output: '上游返回的客户端工具调用格式无效',
+        remote_tool_execution: '上游尝试执行内置工具，已停止该请求',
+        upstream_model_mismatch: '上游实际模型与请求模型不一致，已停止该请求',
+        upstream_http_error: '上游 HTTP 请求失败',
         upstream_protocol_error: '上游协议格式异常',
         output_limit: '上游输出超过 1MB',
         blank_output: '上游连续返回空白',
@@ -397,7 +504,8 @@ export class Gateway {
       if (!res.destroyed) {
         if (!res.headersSent)
           json(res, 502, {
-            error: { message: `${message} (${code})`, type: 'upstream_error', code },
+            ...(isMessages ? { type: 'error', request_id: id } : {}),
+            error: { message: `${message} (${code})`, type: 'api_error', code },
           });
         else {
           res.write(`data: ${JSON.stringify({ error: { message, code } })}\n\n`);
@@ -407,6 +515,11 @@ export class Gateway {
     } finally {
       clearTimeout(timer);
       controller?.abort();
+      if (reservedAccount) {
+        const n = (this.active.get(reservedAccount) || 1) - 1;
+        if (n) this.active.set(reservedAccount, n);
+        else this.active.delete(reservedAccount);
+      }
       if (record) {
         record.duration = Date.now() - started;
         record.httpStatus = res.headersSent ? res.statusCode : record.httpStatus;

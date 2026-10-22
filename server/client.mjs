@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 
 import { creditPacks } from './credits.mjs';
+import { stopClient } from './client-process.mjs';
+import { discoverClient, launchClient } from './platform.mjs';
 
 export const AUTH_KEY = 'iCubeAuthInfo://icube.cloudide';
 export const variants = { intl: 'Trae', cn: 'Trae CN' };
@@ -14,34 +15,43 @@ const profiles = new Map();
 export function profile(variant) {
   if (!variants[variant]) throw new Error('未知客户端版本');
   if (profiles.has(variant)) return profiles.get(variant);
-  const name = variants[variant];
-  const app = `/Applications/${name}.app`;
-  const root = `${app}/Contents/Resources/app`;
-  const product = JSON.parse(fs.readFileSync(`${root}/product.json`, 'utf8'));
-  const source = fs.readFileSync(`${root}/out/main.js`, 'utf8');
-  // Read constants as JSON only. Never evaluate installed application code.
-  const array = (key) => {
-    const match = source.match(
-      new RegExp(key + '=(?:Uint8Array.from|new Uint8Array)\\((\\[[^\\]]+\\])\\)'),
-    );
-    if (!match) throw new Error('客户端加密格式已变化，请重新分析版本');
-    return JSON.parse(match[1]);
-  };
-  const a = array('Gle'),
-    b = array('zle');
-  const dir = path.join(os.homedir(), 'Library/Application Support', name);
+  const found = discoverClient(variant);
+  const { product, source, dir } = found;
   const p = {
     variant,
-    name,
-    app,
-    root,
-    dir,
-    product,
-    salt: Buffer.from(a.map((v, i) => v ^ b[i])),
+    ...found,
+    name: variants[variant],
+    // Network routing and app discovery must not depend on login-state encryption internals.
+    get salt() {
+      return readAuthSalt(source);
+    },
     storage: path.join(dir, 'User/globalStorage/storage.json'),
   };
   profiles.set(variant, p);
   return p;
+}
+// Locate the AES branch semantically; minified variable names change between releases.
+export function readAuthSalt(source) {
+  const pair = source.match(
+    /else\s+if\([\w$]+===[\w$]+\.AES\)[\s\S]{0,160}?=([\w$]+)\[[^\]]+\]\^([\w$]+)\[[^\]]+\]/,
+  );
+  if (!pair) throw new Error('客户端加密格式已变化，请重新分析版本');
+  const arrays = pair.slice(1).map((key) => {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = source.match(
+      new RegExp(escaped + '=(?:Uint8Array.from|new Uint8Array)\\((\\[[^\\]]+\\])\\)'),
+    );
+    if (!m) throw new Error('客户端加密参数缺失');
+    const values = JSON.parse(m[1]);
+    if (
+      !Array.isArray(values) ||
+      values.length !== 64 ||
+      values.some((v) => !Number.isInteger(v) || v < 0 || v > 255)
+    )
+      throw new Error('客户端加密参数无效');
+    return values;
+  });
+  return Buffer.from(arrays[0].map((v, i) => v ^ arrays[1][i]));
 }
 export function decode(value, p) {
   const raw = Buffer.from(value, 'base64');
@@ -135,6 +145,12 @@ export function hostFor(account, category = 'ug') {
   if (url.protocol !== 'https:') throw new Error('客户端服务地址必须是 HTTPS');
   return url.origin;
 }
+export function maskPhone(value) {
+  const v = String(value || '');
+  if (!v) return '';
+  if (v.includes('*')) return v;
+  return v.length > 5 ? v.slice(0, 3) + '******' + v.slice(-2) : '***';
+}
 export function publicAccount(a) {
   return {
     id: a.id,
@@ -154,41 +170,45 @@ export function publicAccount(a) {
     snapshot: a.snapshot || null,
     creditPacks: creditPacks(a),
     autoCheckin: !!a.autoCheckin,
+    enabled: a.enabled !== false,
+    concurrencyLimit: a.concurrencyLimit || 4,
+    phone: maskPhone(a.user.account.phone || a.user.account.mobile || a.user.account.phoneNumber),
     checkin: a.checkin || null,
     models: a.models || [],
   };
 }
-export function launch(variant) {
-  execFileSync('/usr/bin/open', ['-a', profile(variant).app]);
+export async function launch(variant) {
+  await launchClient(profile(variant));
 }
-export function isRunning(variant) {
-  try {
-    return execFileSync('/bin/ps', ['-axo', 'command'], { encoding: 'utf8' })
-      .split('\n')
-      .some((s) => s.startsWith(`${profile(variant).app}/Contents/MacOS/`));
-  } catch {
-    return true;
-  }
-}
-export function switchAccount(account, backupDir) {
-  const p = profile(account.variant);
-  if (isRunning(account.variant))
-    throw new Error(`请先退出 ${p.name} 再切换，避免运行中的客户端覆盖登录态`);
+export async function switchAccount(
+  account,
+  backupDir,
+  { getProfile = profile, stop = stopClient, start = launch } = {},
+) {
+  const p = getProfile(account.variant);
+  // Validate encryption before stopping the editor; reread storage after it has stopped.
+  const auth = encode(account.user, p);
+  const device = account.deviceKeys && account.deviceId ? encode(account.deviceKeys, p) : null;
+  JSON.parse(fs.readFileSync(p.storage, 'utf8'));
+  const stopped = await stop(p);
   const original = fs.readFileSync(p.storage, 'utf8'),
     data = JSON.parse(original);
   fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
-  const backup = path.join(backupDir, `${account.variant}-${Date.now()}.json`);
-  fs.writeFileSync(backup, original, { mode: 0o600 });
-  data[AUTH_KEY] = encode(account.user, p);
+  const backup = path.join(
+    backupDir,
+    `${account.variant}-${Date.now()}-${crypto.randomUUID()}.json`,
+  );
+  fs.writeFileSync(backup, original, { mode: 0o600, flag: 'wx' });
+  data[AUTH_KEY] = auth;
   // Cached entitlement and device credentials must follow the selected identity.
   delete data['iCubeServerData://icube.cloudide'];
   for (const k of Object.keys(data)) if (k.startsWith('iCubeAuthInfo://icube-dc:')) delete data[k];
   if (account.deviceKeys && account.deviceId)
-    data[`iCubeAuthInfo://icube-dc:${account.deviceId}`] = encode(account.deviceKeys, p);
+    data[`iCubeAuthInfo://icube-dc:${account.deviceId}`] = device;
   if (account.cached) data['iCubeServerData://icube.cloudide'] = JSON.stringify(account.cached);
   const tmp = p.storage + '.trae-switch.tmp';
   fs.writeFileSync(tmp, JSON.stringify(data, null, '\t'), { mode: 0o600 });
   fs.renameSync(tmp, p.storage);
-  launch(account.variant);
-  return { backup };
+  await start(account.variant);
+  return { backup, ...stopped };
 }

@@ -1,4 +1,6 @@
 const icons = {
+  star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9Z"/>',
+  phone: '<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 5h4m-3 14h2"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   users:
     '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-3.87M15 3.13a4 4 0 0 1 0 7.75"/><circle cx="9" cy="7" r="4"/>',
@@ -33,10 +35,10 @@ const esc = (v) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
-const fmt = (n) =>
+const fmt = (n, digits = 5) =>
   n === null || n === undefined
     ? '—'
-    : Number(n).toLocaleString('zh-CN', { maximumFractionDigits: 5 });
+    : Number(n).toLocaleString('zh-CN', { maximumFractionDigits: digits });
 const date = (v) =>
   v
     ? new Date(v).toLocaleDateString('zh-CN', {
@@ -95,6 +97,103 @@ function toast(s) {
 async function sync() {
   state = await api('state');
   render();
+  if (page === 'sessions' && !sessionData) await loadSessions();
+}
+let sessionData = null;
+let sessionView = { variant: 'cn', query: '', archived: false, page: 1 };
+async function loadSessions() {
+  sessionData = await api(
+    'sessions?' +
+      new URLSearchParams({
+        variant: sessionView.variant,
+        query: sessionView.query,
+        archived: String(sessionView.archived),
+        offset: String((sessionView.page - 1) * 30),
+      }),
+  );
+  if (page === 'sessions') render();
+}
+let nativeSelectedId = null;
+function sessionsPage() {
+  const d = sessionData || { items: [], total: 0, sources: [] };
+  const selected =
+    d.items.find((s) => s.id === nativeSelectedId) ||
+    d.items.find((s) => s.projectName !== '默认') ||
+    d.items[0];
+  const groups = new Map();
+  for (const s of d.items) {
+    const key = JSON.stringify([s.variant, s.nativeUserId, s.projectId, s.projectName]);
+    if (!groups.has(key))
+      groups.set(key, {
+        name: s.projectName,
+        variant: s.variant,
+        account: s.accountName,
+        items: [],
+      });
+    groups.get(key).items.push(s);
+  }
+  return (
+    heading(
+      'TRAE CLIENT SESSIONS',
+      '会话管理',
+      '按 Trae 客户端的项目分组展示真实会话。',
+      '<button class="primary" data-action="refresh-sessions">' +
+        icon('refresh') +
+        '读取客户端会话</button>',
+    ) +
+    `<section class="panel native-session-panel"><div class="request-filters"><select id="session-region" aria-label="会话地区">${[
+      ['cn', 'Trae CN 国内版'],
+      ['intl', 'Trae 国际版'],
+      ['all', '两个客户端'],
+    ]
+      .map(
+        ([v, t]) =>
+          `<option value="${v}" ${sessionView.variant === v ? 'selected' : ''}>${t}</option>`,
+      )
+      .join(
+        '',
+      )}</select><input id="session-search" aria-label="搜索会话" placeholder="搜索项目、会话标题" value="${esc(sessionView.query)}"><button data-action="filter-sessions">搜索</button><span class="subtle">${d.total} 个客户端会话</span></div><div class="native-session-browser"><div class="native-session-list">${
+      [...groups.values()]
+        .sort((a, b) => Number(a.name === '默认') - Number(b.name === '默认'))
+        .map(
+          (g) =>
+            `<section class="native-project"><h3>${icon(g.name === '默认' ? 'grid' : 'terminal')}${esc(g.name)}<small>${sessionView.variant === 'all' ? (g.variant === 'cn' ? '国内版' : '国际版') + ' · ' : ''}${esc(g.account)}</small></h3>${g.items.map((s) => `<button class="native-session-row ${selected?.id === s.id ? 'selected' : ''}" data-action="native-session-select" data-id="${esc(s.id)}"><span>${s.nativePinned ? '置顶 · ' : ''}${esc(s.title)}</span><small>${date(s.updatedAt)} ${clock(s.updatedAt)}${s.unread ? ' · 未读' : ''}</small></button>`).join('')}</section>`,
+        )
+        .join('') ||
+      '<div class="empty"><h3>暂无可读取的客户端会话</h3><p>在 Trae 中打开历史会话后，再读取客户端列表。</p></div>'
+    }</div><div class="native-session-detail">${selected ? `<div class="eyebrow">${selected.variant === 'cn' ? 'TRAE CN' : 'TRAE'} / ${esc(selected.projectName)}</div><h2>${esc(selected.title)}</h2><p class="subtle">${esc(selected.accountName)} · ${date(selected.updatedAt)} ${clock(selected.updatedAt)}</p><div class="notice">${esc(selected.detailNotice)}</div><dl class="native-session-facts"><dt>项目</dt><dd>${esc(selected.projectName)}</dd><dt>项目目录</dt><dd>${esc(selected.workspace || '默认分组')}</dd><dt>原生会话 ID</dt><dd><code>${esc(selected.nativeSessionId)}</code></dd><dt>读取来源</dt><dd>Trae 客户端事件日志 · 原生会话索引</dd></dl><button data-action="launch" data-variant="${selected.variant}">${icon('arrow')}打开 ${selected.variant === 'cn' ? 'Trae CN' : 'Trae'} 查看正文</button>` : '<p class="subtle">选择一个客户端会话。</p>'}</div></div><div class="session-pagination native-pagination"><span>第 ${sessionView.page} 页 · 共 ${d.total} 个会话</span><div class="actions"><button data-action="sessions-prev" ${sessionView.page <= 1 ? 'disabled' : ''}>上一页</button><button data-action="sessions-next" ${sessionView.page * 30 >= d.total ? 'disabled' : ''}>下一页</button></div></div></section><p class="subtle native-coverage">列表来自客户端保留的结构化事件日志，可能不覆盖已清理或未记录的历史；手动导入副本和未在客户端观察到的 API 会话不列入。</p>${d.sources
+      .filter((s) => sessionView.variant === 'all' || s.variant === sessionView.variant)
+      .map(
+        (s) =>
+          `<p class="subtle native-coverage">${s.variant === 'cn' ? 'Trae CN' : 'Trae'}：${esc(s.message)}${s.partial ? ' 当前读取达到上限，结果可能不完整。' : ''}</p>`,
+      )
+      .join('')}`
+  );
+}
+async function sessionAction(action, id) {
+  if (action === 'native-session-select') {
+    nativeSelectedId = id;
+    render();
+  } else if (action === 'refresh-sessions') {
+    sessionView.page = 1;
+    sessionData = await api('sessions/refresh', {
+      variant: sessionView.variant,
+      query: sessionView.query,
+    });
+    render();
+    toast('已重新读取客户端会话索引');
+  } else if (action === 'filter-sessions') {
+    sessionView = {
+      variant: document.querySelector('#session-region').value,
+      query: document.querySelector('#session-search').value,
+      archived: false,
+      page: 1,
+    };
+    await loadSessions();
+  } else if (action === 'sessions-prev' || action === 'sessions-next') {
+    sessionView.page += action === 'sessions-prev' ? -1 : 1;
+    await loadSessions();
+  }
 }
 function metric(label, value, unit, foot, ico = 'chart', accent = '') {
   return `<div class="metric"><div class="metric-label">${label}${icon(ico)}</div><div class="metric-value">${value}<small>${unit}</small></div><div class="metric-foot">${accent ? `<em>${accent}</em>` : ''}${foot}</div></div>`;
@@ -156,15 +255,15 @@ function packRows(packs) {
   return packs
     .map(
       (p) =>
-        `<div class="credit-pack"><div class="pack-line"><strong>${fmt(p.remaining)} 积分</strong><span>${esc(p.name)}</span><time>${packExpiry(p)}</time></div><progress class="native-progress" max="100" value="${Math.max(0, Math.min(100, (p.remaining / p.total) * 100))}" aria-label="${esc(p.name)}剩余比例"></progress></div>`,
+        `<div class="credit-pack"><div class="pack-line"><strong>${fmt(p.remaining, 2)} 积分</strong><span>${esc(p.name)}</span><time>${packExpiry(p)}</time></div><progress class="native-progress" max="100" value="${Math.max(0, Math.min(100, (p.remaining / p.total) * 100))}" aria-label="${esc(p.name)}剩余比例"></progress></div>`,
     )
     .join('');
 }
 function accountCard(a) {
   const c = credits(a),
     packs = (a.creditPacks || []).filter((p) => p.active),
-    percent = c.total ? Math.max(0, Math.min(100, (c.remaining / c.total) * 100)) : 0;
-  return `<article class="account"><div class="account-top"><div class="account-avatar ${a.variant}">${esc((a.note || a.username || 'T').slice(0, 1).toUpperCase())}</div><div class="account-meta"><h3>${esc(a.note || a.username)}<span class="pill">${a.variant === 'cn' ? '国内版' : '国际版'}</span></h3><small>${esc(a.email || '本地采集账号')} · ${esc(a.snapshot?.pay?.user_pay_identity_str || a.plan)}</small></div><span class="badge ${a.tokenExpired ? 'warning' : ''}">${a.tokenExpired ? '凭证过期' : '凭证有效'}</span></div><div class="account-detail"><div><div class="caption">可用${c.unit === 'USD' ? '额度' : '积分'}</div><div class="number">${c.unit === 'USD' && c.remaining !== null ? '$' : ''}${fmt(c.remaining)} <small>${c.unit === 'USD' ? 'USD' : '积分'}</small></div>${a.variant === 'cn' && a.snapshot?.usage ? `<small>${packs.length} 个可用积分包</small>` : ''}</div><small>${a.snapshot ? '更新于 ' + clock(a.snapshot.time) : '等待刷新用量'}</small></div><progress class="native-progress" max="100" value="${percent}" aria-label="剩余额度"></progress>${a.variant === 'cn' ? `<section class="account-packs"><div class="pack-heading"><span>近期到期</span><button class="quiet" data-action="credit-packs" data-id="${a.id}">查看全部积分包 →</button></div>${packs.length ? packRows(packs.slice(0, 2)) : '<p class="subtle">' + (a.snapshot?.usage ? '暂无可用积分包' : '刷新用量后显示积分包') + '</p>'}</section><div class="account-checkin"><div><strong>${checkedToday(a) ? '今日已签到' : '每日签到'}</strong><small>自动签到 · 启动补签 / 每 10 分钟检查</small></div><button data-action="checkin" data-id="${a.id}">${icon('calendar')}${checkedToday(a) ? '检查签到' : '手动签到'}</button><button class="toggle ${a.autoCheckin ? 'on' : ''}" data-action="toggle-checkin" data-id="${a.id}" aria-label="${esc(a.note || a.username)}自动签到" aria-pressed="${a.autoCheckin}"></button></div>` : '<div class="account-checkin subtle">国际版未提供官方签到入口</div>'}<div class="account-footer"><span class="expiry ${a.tokenExpired ? 'error' : ''}">${icon('shield')} ${date(a.expiredAt)} 到期</span><div class="actions"><button data-action="refresh" data-id="${a.id}">${icon('refresh')}刷新</button><button data-action="switch" data-id="${a.id}">${icon('proxy')}切换</button><button class="quiet" data-action="account-menu" data-id="${a.id}" aria-label="账号设置">${icon('dots')}</button></div></div></article>`;
+    checked = checkedToday(a);
+  return `<article class="account account-v2"><header class="account-top"><div class="account-avatar ${a.variant}">${esc((a.note || a.username || 'T').slice(0, 1).toUpperCase())}</div><div class="account-meta"><h3>${esc(a.note || a.username)}</h3><small>${esc(a.email || '本地采集账号')} · ${esc(a.snapshot?.pay?.user_pay_identity_str || a.plan)}</small>${a.phone ? `<small class="account-phone">${icon('phone')}${esc(a.phone)}</small>` : ''}<div class="account-tags"><span class="pill">${a.variant === 'cn' ? '国内版' : '国际版'}</span><span class="badge ${a.tokenExpired ? 'warning' : ''}">${a.tokenExpired ? '凭证过期' : '凭证有效'}</span><span class="pill">${a.models.length} 个模型</span>${a.variant === 'cn' ? `<span class="checkin-indicator ${checked ? 'checked' : ''}" title="${checked ? '今日已签到' : '今日未签到'}">${icon('calendar')}</span>` : ''}</div></div><button class="quiet account-menu" data-action="account-menu" data-id="${a.id}" aria-label="${esc(a.note || a.username)}账号设置">${icon('dots')}</button></header><section class="account-body"><div class="account-balance"><div class="balance-main">${icon('star')}<strong>${c.unit === 'USD' && c.remaining !== null ? '$' : ''}${fmt(c.remaining, c.unit === 'USD' ? 5 : 2)}</strong><small>剩余${c.unit === 'USD' ? '额度' : '积分'}${c.total !== null ? ' / ' + fmt(c.total) : ''}${c.unit === 'USD' ? ' USD' : ''}</small></div><time>${icon('clock')}${a.snapshot ? clock(a.snapshot.time) + ' 更新' : '尚未刷新'}</time></div>${a.variant === 'cn' ? `<section class="account-packs"><div class="pack-heading"><span>近期到期 · ${packs.length} 个积分包</span><button class="quiet" data-action="credit-packs" data-id="${a.id}">查看全部积分包 →</button></div>${packs.length ? packRows(packs.slice(0, 2)) : '<p class="subtle">' + (a.snapshot?.usage ? '暂无可用积分包' : '刷新账号后显示积分包') + '</p>'}</section>` : `<div class="account-international"><progress class="native-progress" max="100" value="${c.total ? Math.max(0, Math.min(100, (c.remaining / c.total) * 100)) : 0}" aria-label="剩余额度"></progress><p>国际版额度独立统计 · ${date(a.expiredAt)} 凭证到期</p></div>`}</section><footer class="account-footer"><div class="account-buttons"><button data-action="switch" data-id="${a.id}"><span class="button-icon dark">${icon('proxy')}</span>切换</button><button data-action="refresh" data-id="${a.id}"><span class="button-icon gray">${icon('refresh')}</span>刷新</button>${a.variant === 'cn' ? `<button class="${checked ? 'checkin-done' : ''}" data-action="checkin" data-id="${a.id}"><span class="button-icon amber">${icon('calendar')}</span>${checked ? '今日已签到' : '签到'}</button>` : ''}</div><div class="account-controls"><label>反代<button class="toggle ${a.enabled ? 'on' : ''}" data-action="toggle-proxy" data-id="${a.id}" aria-label="${esc(a.note || a.username)}参与反代" aria-pressed="${a.enabled}"></button></label>${a.variant === 'cn' ? `<label>签到<button class="toggle ${a.autoCheckin ? 'on' : ''}" data-action="toggle-checkin" data-id="${a.id}" aria-label="${esc(a.note || a.username)}自动签到" aria-pressed="${a.autoCheckin}"></button></label>` : '<span class="subtle">国际版暂不提供签到</span>'}<small>${a.activeRequests || 0} / ${a.concurrencyLimit} 并发</small></div></footer></article>`;
 }
 function activityList() {
   return (
@@ -222,7 +321,7 @@ function accountsPage() {
       '一处管理，两种版本。凭证仅保存在本机加密账号库中。',
       `<button data-action="capture-choice">${icon('download')}采集本机账号</button>` + addButton,
     ) +
-    `<div class="section-heading"><h2>全部账号<span>${state.accounts.length} 个账号</span></h2>${tabs()}</div><div class="accounts-grid">${filtered().map(accountCard).join('')}</div>${!filtered().length ? `<div class="panel">${empty('还没有账号', '从本机采集已登录账号，或使用浏览器独立登录', addButton)}</div>` : ''}<div class="notice green">${icon('shield')} 切换前自动备份原始登录态。请先退出对应 Trae 客户端，切换成功后会重新打开。</div><section class="panel"><div class="panel-header"><h2>本机客户端</h2><small>自动发现 /Applications</small></div>${state.clients.map((c) => `<div class="settings-row"><div><h3>${esc(c.name)} <span class="pill">${c.installed ? '已安装' : '未安装'}</span></h3><p>${c.installed ? '版本 ' + esc(c.version) : '请先安装客户端'}</p></div><div class="actions"><button data-action="launch" data-variant="${c.variant}">打开客户端 ${icon('arrow')}</button><button data-action="capture" data-variant="${c.variant}">${icon('download')}采集账号</button></div></div>`).join('')}</section>`
+    `<div class="section-heading"><h2>全部账号<span>${state.accounts.length} 个账号</span></h2>${tabs()}</div><div class="accounts-grid">${filtered().map(accountCard).join('')}</div>${!filtered().length ? `<div class="panel">${empty('还没有账号', '从本机采集已登录账号，或使用浏览器独立登录', addButton)}</div>` : ''}<div class="notice green">${icon('shield')} 切换时自动退出对应 Trae 客户端；超时未退出会强制结束。确认退出后备份并切换登录态，再重新启动客户端。</div><section class="panel"><div class="panel-header"><h2>本机客户端</h2><small>自动发现本机安装目录</small></div>${state.clients.map((c) => `<div class="settings-row"><div><h3>${esc(c.name)} <span class="pill">${c.installed ? '已安装' : '未安装'}</span></h3><p>${c.installed ? '版本 ' + esc(c.version) : '请先安装客户端'}</p></div><div class="actions"><button data-action="launch" data-variant="${c.variant}">打开客户端 ${icon('arrow')}</button><button data-action="capture" data-variant="${c.variant}">${icon('download')}采集账号</button></div></div>`).join('')}</section>`
   );
 }
 function creditsPage() {
@@ -312,7 +411,7 @@ function gatewayPage() {
       '按真实模型匹配国内与国际账号，共有模型跨区调度，独有模型自动限定账号池。',
       `<button class="${settings.gatewayRunning ? '' : 'primary'}" data-action="toggle-gateway">${icon('proxy')}${settings.gatewayRunning ? '停止服务' : '启动服务'}</button>`,
     ) +
-    `<div class="notice">原生通用聊天适配尚未完成；当前支持 Chat Completions 文本转换。模型目录可见不代表调用已通过，工具调用、Responses 和 Messages 尚未接入。</div>
+    `<div class="notice">通过官方 Remote Agent 调用模型，支持 Chat Completions 与 Claude Code Messages。Messages 工具调用使用提示协议桥接，由客户端执行；目前仅支持文本。Responses 尚未接入。</div>
  <div class="split"><section class="panel"><div class="panel-header"><h2>服务连接</h2><span class="badge ${settings.gatewayRunning ? '' : 'warning'}">${settings.gatewayRunning ? '运行中' : '已停止'}</span></div>
  <div class="field"><label for="gateway-region">使用地区</label><select id="gateway-region"><option value="all" ${region === 'all' ? 'selected' : ''}>双区联合 · 国内 + 国际</option><option value="cn" ${region === 'cn' ? 'selected' : ''}>国内版 · Trae CN</option><option value="intl" ${region === 'intl' ? 'selected' : ''}>国际版 · Trae</option></select><p>统一 /v1 跟随此配置；/cn/v1 与 /intl/v1 始终限定对应地区。</p></div>
  <div class="field"><label>Base URL · ${region === 'all' ? '双区联合' : region === 'cn' ? '国内版' : '国际版'}</label><div class="key-line"><code>${base}</code><button data-action="copy-url">${icon('copy')}复制</button></div></div>
@@ -329,7 +428,7 @@ function gatewayPage() {
     "messages": [
       {"role":"user","content":"你好"}
     ]
-  }'</pre><p>GET ${base}/models 只返回当前地区所选账号池的模型。</p><div class="notice green">国内：/${'cn'}/v1<br>国际：/intl/v1<br>双区联合：/v1（选择上方双区联合模式）</div></section></div>
+  }'</pre><p>GET ${base}/models 返回所选账号池模型；Claude Code 的 ANTHROPIC_BASE_URL 请使用不带 /v1 的地址：${base.replace(/\/v1$/, '')}；SDK 自动追加 /v1/messages。升级后请查询当前地区目录，清理已下线的缓存模型。</p><div class="notice green">国内：/${'cn'}/v1<br>国际：/intl/v1<br>双区联合：/v1（选择上方双区联合模式）</div></section></div>
  <section class="panel"><div class="panel-header"><h2>${region === 'all' ? '双区联合' : region === 'cn' ? '国内版' : '国际版'}模型目录</h2><button data-action="models-all">${icon('refresh')}查询当前地区目录</button></div><div id="model-results">${routingCatalogHtml()}</div></section>`
   );
 }
@@ -486,10 +585,14 @@ function diagnosticsPage() {
 function settingsPage() {
   return (
     heading('PREFERENCES', '偏好设置', '本地优先，保持简单。') +
-    `<section class="panel"><div class="settings-row"><div><h3>数据存储</h3><p>账号库使用 AES-256-GCM 加密，文件保存在 ~/.trae-switch/，密钥文件权限为 0600。</p></div>${icon('shield')}</div><div class="settings-row"><div><h3>时区</h3><p>Asia/Shanghai · 中国标准时间（UTC+8）</p></div><span class="pill">北京时间</span></div><div class="settings-row"><div><h3>数据口径</h3><p>官方积分与美元额度分开展示；Token 缺失时不估算。</p></div>${icon('chart')}</div><div class="settings-row"><div><h3>Trae Switch</h3><p>0.3.2 · 本地账号与用量工作台</p></div><span class="pill">LOCAL FIRST</span></div></section>`
+    `<section class="panel"><div class="settings-row"><div><h3>数据存储</h3><p>账号库使用 AES-256-GCM 加密，文件保存在 ~/.trae-switch/，密钥文件权限为 0600。</p></div>${icon('shield')}</div><div class="settings-row"><div><h3>时区</h3><p>Asia/Shanghai · 中国标准时间（UTC+8）</p></div><span class="pill">北京时间</span></div><div class="settings-row"><div><h3>数据口径</h3><p>官方积分与美元额度分开展示；Token 缺失时不估算。</p></div>${icon('chart')}</div><div class="settings-row"><div><h3>Trae Switch</h3><p>0.7.0 · 本地账号与用量工作台</p></div><span class="pill">LOCAL FIRST</span></div></section>`
   );
 }
 function render() {
+  if (page === 'sessions') {
+    page = 'overview';
+    history.replaceState(null, '', '#overview');
+  }
   if (!state) return;
   const current = pages.find((x) => x[0] === page) || ['settings', 'settings', '偏好设置'];
   const renderers = {
@@ -503,7 +606,7 @@ function render() {
     diagnostics: diagnosticsPage,
     settings: settingsPage,
   };
-  app.innerHTML = `<div class="shell"><aside><div class="brand"><img class="brand-icon" src="/icon.svg" alt="Trae Switch 图标"><div>Trae Switch<small>ACCOUNT WORKSPACE</small></div></div><div class="navlabel">工作空间</div><nav class="nav">${pages.map(([id, i, title]) => `<button class="${page === id ? 'active' : ''}" data-page="${id}">${icon(i)}<span class="navtext">${title}</span>${id === 'accounts' ? `<span class="count">${state.accounts.length}</span>` : ''}</button>`).join('')}</nav><div class="sidebar-bottom"><nav class="nav"><button data-page="settings" class="${page === 'settings' ? 'active' : ''}">${icon('settings')}<span>偏好设置</span></button></nav><div class="local-status"><strong><span class="dot"></span>本地服务已连接</strong><br>数据保存在你的设备上<br><span class="subtle">Trae Switch v0.3.2</span></div></div></aside><div class="workspace"><header class="topbar"><div class="crumb">${icon('grid')}<span>工作空间</span><span>/</span><b>${current[2]}</b></div><div class="top-right"><span class="subtle">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}</span><span class="dot"></span><div class="avatar">T</div></div></header><main class="content">${(renderers[page] || overview)()}<footer class="bottom-note"><span><span class="dot"></span>本地连接 · 凭证加密存储</span><span>为专注而设计。 SWITCH / 01</span></footer></main></div></div>`;
+  app.innerHTML = `<div class="shell"><aside><div class="brand"><img class="brand-icon" src="/icon.svg" alt="Trae Switch 图标"><div>Trae Switch<small>ACCOUNT WORKSPACE</small></div></div><div class="navlabel">工作空间</div><nav class="nav">${pages.map(([id, i, title]) => `<button class="${page === id ? 'active' : ''}" data-page="${id}">${icon(i)}<span class="navtext">${title}</span>${id === 'accounts' ? `<span class="count">${state.accounts.length}</span>` : ''}</button>`).join('')}</nav><div class="sidebar-bottom"><nav class="nav"><button data-page="settings" class="${page === 'settings' ? 'active' : ''}">${icon('settings')}<span>偏好设置</span></button></nav><div class="local-status"><strong><span class="dot"></span>本地服务已连接</strong><br>数据保存在你的设备上<br><span class="subtle">Trae Switch v0.7.0</span></div></div></aside><div class="workspace"><header class="topbar"><div class="crumb">${icon('grid')}<span>工作空间</span><span>/</span><b>${current[2]}</b></div><div class="top-right"><span class="subtle">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}</span><span class="dot"></span><div class="avatar">T</div></div></header><main class="content">${(renderers[page] || overview)()}<footer class="bottom-note"><span><span class="dot"></span>本地连接 · 凭证加密存储</span><span>为专注而设计。 SWITCH / 01</span></footer></main></div></div>`;
 }
 function showDialog(title, body, buttons = '') {
   modal.innerHTML = `<h2>${title}</h2><div class="dialog-body">${body}</div><div class="modal-actions"><button data-action="close-modal">关闭</button>${buttons}</div>`;
@@ -617,8 +720,8 @@ document.addEventListener('click', async (e) => {
   if (action === 'account-menu') {
     showDialog(
       '账号设置',
-      `<div class="field"><label>备注名称</label><input id="account-note" maxlength="120" value="${esc(a.note)}" placeholder="为账号设置容易辨认的名称"></div><p>登录凭证到期：${esc(a.expiredAt)}</p><p>刷新凭证到期：${esc(a.refreshExpiredAt)}</p><div class="spacer"></div><button data-action="token" data-id="${id}">${icon('key')}刷新登录凭证</button>`,
-      `<button class="primary" data-action="save-note" data-id="${id}">保存备注</button>`,
+      `<div class="field"><label>备注名称</label><input id="account-note" maxlength="120" value="${esc(a.note)}" placeholder="为账号设置容易辨认的名称"></div><div class="field"><label>账号最大并发</label><input id="account-concurrency" type="number" min="1" max="32" value="${a.concurrencyLimit}"></div><p>登录凭证到期：${esc(a.expiredAt)}</p><p>刷新凭证到期：${esc(a.refreshExpiredAt)}</p><div class="spacer"></div><button data-action="token" data-id="${id}">${icon('key')}刷新登录凭证</button>`,
+      `<button class="primary" data-action="save-note" data-id="${id}">保存设置</button>`,
     );
     return;
   }
@@ -633,6 +736,19 @@ document.addEventListener('click', async (e) => {
   }
   el.disabled = true;
   try {
+    if (
+      action.startsWith('session-') ||
+      [
+        'refresh-sessions',
+        'native-session-select',
+        'filter-sessions',
+        'sessions-prev',
+        'sessions-next',
+      ].includes(action)
+    ) {
+      await sessionAction(action, id);
+      return;
+    }
     if (action === 'capture') {
       await api('capture', { variant });
       if (modal.open) modal.close();
@@ -670,14 +786,25 @@ document.addEventListener('click', async (e) => {
           (refreshed ? '，已刷新积分' : '，积分刷新失败，可稍后手动刷新'),
       );
     } else if (action === 'switch') {
-      await api('switch', { id });
+      const result = await api('switch', { id });
       await sync();
-      toast('账号已切换，原登录态已备份，客户端已启动');
+      toast(
+        '账号已切换，原登录态已备份，客户端已启动' +
+          (result.forced ? '（旧客户端已强制退出）' : ''),
+      );
     } else if (action === 'save-note') {
-      await api('account', { id, note: document.querySelector('#account-note').value });
+      await api('account', {
+        id,
+        note: document.querySelector('#account-note').value,
+        concurrencyLimit: Number(document.querySelector('#account-concurrency').value),
+      });
       modal.close();
       await sync();
-      toast('备注已保存');
+      toast('账号设置已保存');
+    } else if (action === 'toggle-proxy') {
+      await api('account', { id, enabled: !a.enabled });
+      await sync();
+      toast(a.enabled ? '该账号已暂停参与反代' : '该账号已启用反代');
     } else if (action === 'toggle-checkin') {
       await api('account', { id, autoCheckin: !a.autoCheckin });
       await sync();
@@ -774,6 +901,7 @@ document.addEventListener('change', async (e) => {
 window.addEventListener('hashchange', () => {
   page = location.hash.slice(1) || 'overview';
   render();
+  if (page === 'sessions') loadSessions().catch((e) => toast(e.message));
 });
 app.innerHTML = '<div class="loading">正在连接本地工作台…</div>';
 sync().catch((e) => {
