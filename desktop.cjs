@@ -134,6 +134,11 @@ async function boot() {
       `new Promise((resolve,reject)=>{const deadline=Date.now()+8000;const check=()=>{if(document.querySelector('nav')&&document.querySelector('h1'))resolve(!document.querySelector('[data-page="sessions"]'));else if(Date.now()>deadline)reject(new Error('Renderer failed to load'));else setTimeout(check,50);};check();})`,
     );
     if (!ok) throw new Error('Hidden session entry unexpectedly visible');
+    const chartLayout = await win.webContents.executeJavaScript(
+      `(()=>{const svg=document.querySelector('.request-trend svg');return !!svg && !document.querySelector('.chart-bar') && document.documentElement.scrollWidth<=document.documentElement.clientWidth && svg.getBoundingClientRect().right<=svg.parentElement.getBoundingClientRect().right+1;})()`,
+    );
+    if (!chartLayout)
+      throw new Error('Request chart is missing or overflows the packaged renderer');
     const bridge = await win.webContents.executeJavaScript(
       `window.desktopUpdates.state().then(s => ({ version: s.currentVersion, status: s.status }))`,
     );
