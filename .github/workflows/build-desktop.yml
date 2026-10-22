@@ -49,6 +49,24 @@ jobs:
           }
       - run: npm run ${{ matrix.build }}
       - run: npm run smoke:desktop
+      - name: Verify Windows installation and uninstallation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $setup = Get-ChildItem "dist/windows-$version/*-Setup.exe" | Select-Object -First 1
+          $install = Join-Path $env:RUNNER_TEMP "TraeSwitchInstallSmoke"
+          if (Test-Path $install) { throw "Smoke installation directory already exists" }
+          $process = Start-Process $setup.FullName -ArgumentList "/S /D=$install" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installation failed" }
+          $registry = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TraeSwitch"
+          $expected = '"' + (Join-Path $install "Uninstall.exe") + '"'
+          if ((Get-ItemProperty $registry).UninstallString -cne $expected) { throw "Invalid uninstall command" }
+          $env:TRAE_SWITCH_SMOKE_EXECUTABLE = Join-Path $install "Trae Switch.exe"
+          npm run smoke:desktop
+          if ($LASTEXITCODE -ne 0) { throw "Installed app smoke test failed" }
+          $process = Start-Process (Join-Path $install "Uninstall.exe") -ArgumentList "/S _?=$install" -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or (Test-Path $registry) -or (Test-Path (Join-Path $install "Trae Switch.exe"))) { throw "Uninstallation failed" }
       - uses: actions/upload-artifact@v4
         with:
           name: Trae-Switch-${{ matrix.target }}

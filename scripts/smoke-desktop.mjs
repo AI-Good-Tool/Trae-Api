@@ -10,13 +10,14 @@ const base = path.resolve(
   process.platform === 'win32' ? `windows-${manifest.version}` : `mac-${manifest.version}`,
 );
 const executable =
-  process.platform === 'win32'
+  process.env.TRAE_SWITCH_SMOKE_EXECUTABLE ||
+  (process.platform === 'win32'
     ? path.join(base, 'Trae Switch-win32-x64', 'Trae Switch.exe')
     : path.join(
         base,
         `Trae Switch-darwin-${process.arch}`,
         'Trae Switch.app/Contents/MacOS/Trae Switch',
-      );
+      ));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trae-desktop-smoke-'));
 const { stdout, stderr } = await promisify(execFile)(executable, [], {
   env: {

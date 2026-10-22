@@ -24,7 +24,7 @@ Section "Install"
   CreateShortCut "$SMPROGRAMS\Trae Switch\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TraeSwitch" "DisplayName" "Trae Switch"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TraeSwitch" "DisplayVersion" "${APP_VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TraeSwitch" "UninstallString" '$"$INSTDIR\Uninstall.exe$"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TraeSwitch" "UninstallString" '"$INSTDIR\Uninstall.exe"'
 SectionEnd
 Section "Uninstall"
   SetShellVarContext current
