@@ -582,10 +582,75 @@ function diagnosticsPage() {
     }</section></div><section class="panel"><div class="panel-header"><h2>操作日志</h2><small>最近 200 条 · 不记录凭证明文</small></div>${state.events.map((e) => `<div class="activity"><div class="activity-icon">${icon(e.type === 'error' ? 'pulse' : 'check')}</div><div class="activity-text"><p>${esc(e.message)}</p><small>${esc(e.type)}</small></div><time>${date(e.time)} ${clock(e.time)}</time></div>`).join('') || empty('暂无日志', '操作记录会显示在这里。')}</section>`
   );
 }
+let updateState = { status: 'idle', downloaded: 0, total: 0, info: null };
+const desktopUpdates = window.desktopUpdates;
+const updateLabels = {
+  idle: '随时检查新版本',
+  checking: '正在检查更新…',
+  unpublished: '尚未发布正式版本',
+  latest: '当前已是最新版本',
+  available: '发现新版本',
+  downloading: '正在下载更新…',
+  ready: '更新已下载并校验',
+  installing: '正在安装，应用即将重启…',
+  cancelled: '下载已取消',
+  error: '更新操作失败',
+};
+function aboutPage() {
+  const info = state.app;
+  const update = updateState;
+  const release = update.info;
+  const busy = ['checking', 'downloading', 'installing'].includes(update.status);
+  const tile = (ico, title, desc, href) =>
+    `<a class="about-tile" href="${esc(href)}" target="_blank" rel="noreferrer"><span class="about-tile-icon">${icon(ico)}</span><span><strong>${title}</strong><small>${desc}</small></span>${icon('arrow')}</a>`;
+  return `<section class="about-page"><div class="about-hero"><img src="/icon.svg" alt="Trae Switch"><span class="eyebrow">你的本地 AI 账号工作台</span><h1>${esc(info.name)}</h1><div class="about-badges"><strong>v${esc(info.version)}</strong><a href="${esc(info.repository)}" target="_blank" rel="noreferrer">${icon('code')} GitHub</a></div><p>把账号切换、积分签到、用量统计和模型服务，收进一个清爽的桌面工作台。</p></div><div class="about-grid">${tile('users', '作者主页', '访问 vs2pk0 的 GitHub 主页', info.author)}${tile('code', '开源仓库', '查看源码、版本和发布记录', info.repository)}${tile('leaf', '赞助支持', '了解作者的项目支持方式', 'https://github.com/vs2pk0/codex-switcher/blob/main/doc/sponsor.md')}${tile('pulse', '问题反馈', '提交 Issue 或改进建议', info.feedback)}</div><section class="panel update-panel" aria-live="polite"><div class="panel-header"><div><h2>${icon('refresh')} 检查更新</h2><p>${esc(updateLabels[update.status] || '检查更新')}${release?.hasUpdate ? ' · v' + esc(release.version) : ''}</p></div><button data-action="check-update" ${busy ? 'disabled' : ''}>${icon('refresh')}重新检查</button></div>${release?.hasUpdate ? `<p>当前 v${esc(info.version)} → 最新 v${esc(release.version)} · ${esc(update.target || release.target)}</p>${release.notes ? `<details><summary>查看更新说明</summary><pre class="release-notes">${esc(release.notes)}</pre></details>` : ''}` : ''}${update.status === 'unpublished' ? '<p class="subtle">正式版本发布到 GitHub Releases 后，就可以在这里获取更新。</p>' : ''}${update.previousFailure ? `<p class="update-error">${esc(update.previousFailure)}</p>` : ''}${update.error ? `<p class="update-error">${esc(update.error)}</p>` : ''}${['downloading', 'ready', 'installing'].includes(update.status) ? `<progress max="${update.total || 1}" value="${update.downloaded}" aria-label="更新下载进度"></progress><p class="subtle">${fmt(update.downloaded / 1048576, 1)} / ${fmt(update.total / 1048576, 1)} MB${update.total ? ' · ' + Math.floor((update.downloaded / update.total) * 100) + '%' : ''}</p>` : ''}<div class="actions">${release?.hasUpdate && desktopUpdates && update.canInstall && release.canDownload && ['available', 'cancelled', 'error'].includes(update.status) ? '<button class="primary" data-action="download-update">下载更新</button>' : ''}${update.status === 'downloading' ? '<button data-action="cancel-update">取消下载</button>' : ''}${update.status === 'ready' ? '<button class="primary" data-action="install-update">安装并重新启动</button>' : ''}<a class="about-release-link" href="${esc(release?.releaseUrl || info.releases)}" target="_blank" rel="noreferrer">查看发布页面 →</a></div>${!desktopUpdates || !update.canInstall ? '<p class="subtle">' + esc(update.installUnavailableReason || '当前为浏览器或开发模式，可检查版本；应用内安装请使用打包后的桌面版。') + '</p>' : '<p class="subtle">启动时自动检查版本；下载与安装由你手动确认。更新保留本机账号和设置。</p>'}</section></section>`;
+}
+async function updateAction(action) {
+  if (action === 'install-update') {
+    showDialog(
+      '安装更新',
+      '<p>应用将退出，安装已校验的新版并重新启动。请先完成正在进行的请求并保存工作。</p>',
+      '<button class="primary" data-action="confirm-install-update">安装并重启</button>',
+    );
+    return;
+  }
+  if (action === 'confirm-install-update') modal.close();
+  try {
+    if (action === 'check-update') {
+      updateState = { ...updateState, status: 'checking', error: null };
+      render();
+    }
+    if (action === 'check-update')
+      updateState = desktopUpdates ? await desktopUpdates.check() : await api('update/check', {});
+    if (action === 'download-update') updateState = await desktopUpdates.download();
+    if (action === 'cancel-update') updateState = await desktopUpdates.cancel();
+    if (action === 'confirm-install-update') updateState = await desktopUpdates.install();
+  } catch (error) {
+    toast(error.message);
+  }
+  if (page === 'about') render();
+}
+if (desktopUpdates) {
+  desktopUpdates
+    .state()
+    .then((value) => {
+      updateState = value;
+      if (state && page === 'about') render();
+    })
+    .catch(() => {});
+  desktopUpdates.onChange((value) => {
+    const previous = updateState.status;
+    updateState = value;
+    if (state && page === 'about') render();
+    else if (value.status === 'available' && previous !== 'available')
+      toast('发现新版 v' + value.info.version + '，可在“关于应用”中更新');
+  });
+}
+
 function settingsPage() {
   return (
     heading('PREFERENCES', '偏好设置', '本地优先，保持简单。') +
-    `<section class="panel"><div class="settings-row"><div><h3>数据存储</h3><p>账号库使用 AES-256-GCM 加密，文件保存在 ~/.trae-switch/，密钥文件权限为 0600。</p></div>${icon('shield')}</div><div class="settings-row"><div><h3>时区</h3><p>Asia/Shanghai · 中国标准时间（UTC+8）</p></div><span class="pill">北京时间</span></div><div class="settings-row"><div><h3>数据口径</h3><p>官方积分与美元额度分开展示；Token 缺失时不估算。</p></div>${icon('chart')}</div><div class="settings-row"><div><h3>Trae Switch</h3><p>0.7.0 · 本地账号与用量工作台</p></div><span class="pill">LOCAL FIRST</span></div></section>`
+    `<section class="panel"><div class="settings-row"><div><h3>数据存储</h3><p>账号库使用 AES-256-GCM 加密，文件保存在 ~/.trae-switch/，密钥文件权限为 0600。</p></div>${icon('shield')}</div><div class="settings-row"><div><h3>时区</h3><p>Asia/Shanghai · 中国标准时间（UTC+8）</p></div><span class="pill">北京时间</span></div><div class="settings-row"><div><h3>数据口径</h3><p>官方积分与美元额度分开展示；Token 缺失时不估算。</p></div>${icon('chart')}</div><div class="settings-row"><div><h3>Trae Switch</h3><p>${esc(state.app.version)} · 本地账号与用量工作台</p></div><span class="pill">LOCAL FIRST</span></div></section>`
   );
 }
 function render() {
@@ -594,7 +659,9 @@ function render() {
     history.replaceState(null, '', '#overview');
   }
   if (!state) return;
-  const current = pages.find((x) => x[0] === page) || ['settings', 'settings', '偏好设置'];
+  const current =
+    pages.find((x) => x[0] === page) ||
+    (page === 'about' ? ['about', 'leaf', '关于应用'] : ['settings', 'settings', '偏好设置']);
   const renderers = {
     overview,
     accounts: accountsPage,
@@ -605,8 +672,9 @@ function render() {
     requests: requestsPage,
     diagnostics: diagnosticsPage,
     settings: settingsPage,
+    about: aboutPage,
   };
-  app.innerHTML = `<div class="shell"><aside><div class="brand"><img class="brand-icon" src="/icon.svg" alt="Trae Switch 图标"><div>Trae Switch<small>ACCOUNT WORKSPACE</small></div></div><div class="navlabel">工作空间</div><nav class="nav">${pages.map(([id, i, title]) => `<button class="${page === id ? 'active' : ''}" data-page="${id}">${icon(i)}<span class="navtext">${title}</span>${id === 'accounts' ? `<span class="count">${state.accounts.length}</span>` : ''}</button>`).join('')}</nav><div class="sidebar-bottom"><nav class="nav"><button data-page="settings" class="${page === 'settings' ? 'active' : ''}">${icon('settings')}<span>偏好设置</span></button></nav><div class="local-status"><strong><span class="dot"></span>本地服务已连接</strong><br>数据保存在你的设备上<br><span class="subtle">Trae Switch v0.7.0</span></div></div></aside><div class="workspace"><header class="topbar"><div class="crumb">${icon('grid')}<span>工作空间</span><span>/</span><b>${current[2]}</b></div><div class="top-right"><span class="subtle">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}</span><span class="dot"></span><div class="avatar">T</div></div></header><main class="content">${(renderers[page] || overview)()}<footer class="bottom-note"><span><span class="dot"></span>本地连接 · 凭证加密存储</span><span>为专注而设计。 SWITCH / 01</span></footer></main></div></div>`;
+  app.innerHTML = `<div class="shell"><aside><div class="brand"><img class="brand-icon" src="/icon.svg" alt="Trae Switch 图标"><div>Trae Switch<small>ACCOUNT WORKSPACE</small></div></div><div class="navlabel">工作空间</div><nav class="nav">${pages.map(([id, i, title]) => `<button class="${page === id ? 'active' : ''}" data-page="${id}">${icon(i)}<span class="navtext">${title}</span>${id === 'accounts' ? `<span class="count">${state.accounts.length}</span>` : ''}</button>`).join('')}</nav><div class="sidebar-bottom"><nav class="nav"><button data-page="about" class="${page === 'about' ? 'active' : ''}">${icon('leaf')}<span>关于应用</span></button><button data-page="settings" class="${page === 'settings' ? 'active' : ''}">${icon('settings')}<span>偏好设置</span></button></nav><div class="local-status"><strong><span class="dot"></span>本地服务已连接</strong><br>数据保存在你的设备上<br><span class="subtle">Trae Switch v${esc(state.app.version)}</span></div></div></aside><div class="workspace"><header class="topbar"><div class="crumb">${icon('grid')}<span>工作空间</span><span>/</span><b>${current[2]}</b></div><div class="top-right"><span class="subtle">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}</span><span class="dot"></span><div class="avatar">T</div></div></header><main class="content">${(renderers[page] || overview)()}<footer class="bottom-note"><span><span class="dot"></span>本地连接 · 凭证加密存储</span><span>为专注而设计。 SWITCH / 01</span></footer></main></div></div>`;
 }
 function showDialog(title, body, buttons = '') {
   modal.innerHTML = `<h2>${title}</h2><div class="dialog-body">${body}</div><div class="modal-actions"><button data-action="close-modal">关闭</button>${buttons}</div>`;
@@ -655,6 +723,18 @@ document.addEventListener('click', async (e) => {
   if (!el || el.disabled) return;
   const { action, id, variant } = el.dataset;
   const a = state?.accounts.find((x) => x.id === id);
+  if (
+    [
+      'check-update',
+      'download-update',
+      'cancel-update',
+      'install-update',
+      'confirm-install-update',
+    ].includes(action)
+  ) {
+    await updateAction(action);
+    return;
+  }
   if (action === 'request-detail') {
     requestDetail(id);
     return;

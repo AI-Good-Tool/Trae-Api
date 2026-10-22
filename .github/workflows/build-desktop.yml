@@ -2,7 +2,13 @@ name: Build desktop apps
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish installers to GitHub Releases after all checks pass
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -77,3 +83,33 @@ jobs:
             dist/${{ matrix.folder }}-*/*.sha256
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Trae-Switch-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish verified installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="v$version"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "$tag" ]]; then
+            echo "Release tag does not match package version"; exit 1
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to overwrite update assets"; exit 1
+          fi
+          (cd release-assets && sha256sum --check *.sha256)
+          gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --title "Trae Switch $tag" --generate-notes

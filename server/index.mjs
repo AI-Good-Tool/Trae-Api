@@ -1,3 +1,5 @@
+import { appInfo } from './app-info.mjs';
+import { AppUpdater } from './updater.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,6 +21,7 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
   const gateway = new Gateway(store),
     login = new Login(store),
     session = crypto.randomBytes(32).toString('hex');
+  const updateChecker = new AppUpdater();
   const busy = new Set();
   const checkins = new Checkins(store);
   const sessions = new Sessions(store);
@@ -70,6 +73,7 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
           });
           const { apiKey, ...settings } = store.data.settings;
           result = {
+            app: appInfo,
             accounts: store.data.accounts.map((a) => ({
               ...publicAccount(a),
               activeRequests: gateway.active.get(a.id) || 0,
@@ -91,6 +95,9 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
           const id = body.id,
             a = id && !url.pathname.startsWith('/api/sessions/') ? store.account(id) : null;
           switch (url.pathname) {
+            case '/api/update/check':
+              result = await updateChecker.check();
+              break;
             case '/api/sessions/refresh':
               result = sessions.list({ variant: body.variant || 'all', query: body.query || '' });
               break;
@@ -227,7 +234,7 @@ export async function start(port = Number(process.env.PORT || 19827), store = ne
             : file.endsWith('.css')
               ? 'text/css'
               : 'text/html; charset=utf-8',
-        'X-Trae-Switch': '0.7.0',
+        'X-Trae-Switch': appInfo.version,
         'Set-Cookie': `trae_session=${session}; HttpOnly; SameSite=Strict; Path=/`,
         'Content-Security-Policy':
           "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'",

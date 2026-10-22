@@ -1,6 +1,6 @@
 {
   "name": "trae-switch",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Trae / Trae CN 本地账号与用量工作台",
   "type": "module",
@@ -12,7 +12,7 @@
     "inspect": "node scripts/inspect.mjs",
     "icons": "node scripts/build-icons.mjs",
     "build:mac": "node scripts/build-mac.mjs",
-    "format:check": "prettier --check \"server/**/*.mjs\" \"ui/*.{js,css,html,svg}\" \"scripts/*.mjs\" \"tests/*.mjs\" \"desktop.cjs\"",
+    "format:check": "prettier --check \"server/**/*.mjs\" \"ui/*.{js,css,html,svg}\" \"scripts/*.mjs\" \"tests/*.mjs\" \"*.cjs\"",
     "build:windows": "node scripts/build-windows.mjs",
     "smoke:desktop": "node scripts/smoke-desktop.mjs"
   },
