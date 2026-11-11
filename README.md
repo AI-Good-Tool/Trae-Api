@@ -1,10 +1,40 @@
 # Trae Switch
 
-Trae / Trae CN 本地账号与用量工作台，支持 Windows 和 macOS。0.8.6 恢复默认云端反代与临时任务自动清理，隐藏通道开关，升级时将旧的本地模式配置恢复为云端模式。0.8.5 修复本地窗口重新初始化后持续等待的问题，增加保活与处理阶段显示，并避免并发创建本地会话时的数据库锁冲突。0.8.4 修复切换本地通道后旧模型目录导致的错误拒绝，自动刷新并迁移能力缓存。0.8.3 增加反代通道开关：默认云端任务自动清理，关闭后使用独立的 Trae 本地会话运行实例。0.8.1 使用三列自适应紧凑等高账号卡片，并修复请求趋势图溢出。0.8.0 新增关于应用、检查更新和应用内安装更新；账号卡片提供积分包、手动签到、自动签到、反代开关和并发设置。会话管理入口按要求继续隐藏。
+Trae Switch 是面向 Trae 国际版和 Trae CN 的桌面账号工作台与本地模型网关。你可以在同一处切换 IDE 账号、查看国内积分与国际美元额度，也可以让 CC GUI、Claude Code 等工具通过本地 API 调用账号支持的模型。支持 Windows x64、macOS Apple Silicon 和 macOS Intel。
+
+[下载最新版本](https://github.com/AI-Good-Tool/Trae-Api/releases/latest) · [快速上手](#快速上手) · [安装 IDE 主题](#安装-ide-主题)
+
+## 功能亮点
+
+- **双区账号切换** — 采集本机已登录账号，或通过浏览器授权添加。切换时自动备份原登录态，并重启对应的 Trae 或 Trae CN 客户端。
+- **积分、额度与签到** — 国内版查看积分包余额和到期时间，支持手动、批量和自动签到。国际版单独显示美元额度。Token 用量按上游实际返回的统计汇总。
+- **模型网关与多账号调度** — 兼容 OpenAI Chat Completions 和 Claude Messages。支持模型别名、跨区调度、指定账号和账号并发上限。
+- **请求排查与任务清理** — 在本机查看请求状态、耗时、真实模型、Token 和清理结果。每次调用结束后，自动清理本次生成的临时云端任务。
+- **应用内更新** — 从「关于应用」检查、下载并安装适配当前系统和架构的版本，保留账号和设置。
+
+![Trae Switch 账号管理页面，展示国内积分、国际美元额度和账号设置](docs/images/accounts-0.8.6-demo.png)
+
+*账号管理界面，使用示例账号和额度。*
+
+## 工作流程节点图
+
+```mermaid
+flowchart TD
+    IDE["Trae / Trae CN IDE"] -->|采集已登录账号| Switch["Trae Switch 工作台"]
+    Switch -->|切换账号并重启| IDE
+    Switch --> Vault["本机加密账号库"]
+    Caller["CC GUI / Claude Code / API 客户端"] --> Gateway["本地模型网关"]
+    Gateway --> Route["按模型、地区和并发选择账号"]
+    Vault --> Route
+    Route --> Remote["Trae 云端 Remote Agent"]
+    Remote -->|请求结束| Cleanup["自动清理本次临时任务"]
+    Gateway --> Records["本机请求记录与 Token 统计"]
+    Cleanup -->|记录清理结果| Records
+```
 
 ## 安装与运行
 
-GitHub Actions 的 **Build desktop apps** 在推送 main 或手动运行时生成三个平台的构建产物：
+正式安装包可在 [GitHub Releases](https://github.com/AI-Good-Tool/Trae-Api/releases/latest) 下载，按系统和处理器架构选择。
 
 | 平台 | 产物 |
 | --- | --- |
@@ -12,7 +42,18 @@ GitHub Actions 的 **Build desktop apps** 在推送 main 或手动运行时生�
 | macOS Apple Silicon | arm64 DMG、SHA-256 |
 | macOS Intel | x64 DMG、SHA-256 |
 
-在仓库 Actions 页面打开对应成功运行，在 Artifacts 下载。Windows 安装程序安装至当前用户的本地应用目录，无需管理员权限；便携 ZIP 解压后运行 Trae Switch.exe。macOS 将应用拖入 Applications。桌面包自带运行环境，无需额外安装 Node.js。macOS 使用 ad-hoc 签名，未做 Apple Developer ID 公证；Windows 包未做商业证书签名。
+Windows 安装程序安装至当前用户的本地应用目录，无需管理员权限。使用便携版时，解压 ZIP 后运行 `Trae Switch.exe`。macOS 打开 DMG 并将应用拖入「应用程序」。桌面包自带运行环境，无需额外安装 Node.js。macOS 使用 ad-hoc 签名，未做 Apple Developer ID 公证；Windows 包未做商业证书签名。
+
+如需下载尚未正式发布的构建，可以在 [GitHub Actions](https://github.com/AI-Good-Tool/Trae-Api/actions) 打开成功的 **Build desktop apps** 运行，从 Artifacts 获取安装包。
+
+### 快速上手
+
+1. **添加账号。** 在本机安装要使用的 Trae 或 Trae CN。打开 Trae Switch 的「账号管理 → 添加账号」，选择浏览器授权，或从已登录的客户端采集账号。
+2. **切换账号或看用量。** 在账号卡片点「切换」将该账号应用到对应客户端，或点「刷新」同步官方用量。国内版可在同一张卡片开启自动签到。
+3. **接入模型。** 在「模型反代」选择地区，查询当前地区模型目录并启动服务。复制页面上的 Base URL 和 API Key，在调用方填写目录中的模型名或别名。Claude Code 使用不带 `/v1` 的网关地址作为 `ANTHROPIC_BASE_URL`。
+4. **查看结果。** 打开「请求记录」，按地区或状态筛选，查看实际路由账号、耗时、Token 和临时任务清理结果。
+
+### 源码运行与打包
 
 源码运行需要 Node.js 22+（CI 使用 24）：
 
@@ -40,6 +81,12 @@ npm run smoke:desktop
 - Windows：自动识别 `%LOCALAPPDATA%\Programs\Trae`、`Trae CN`、Program Files 及其 current 目录。数据读取自 `%APPDATA%\Trae`、`Trae CN`。
 - 自定义安装可用 `TRAE_INTL_PATH`、`TRAE_CN_PATH` 指定 macOS 应用包或 Windows 安装目录／exe。数据目录跟随操作系统当前用户。
 - 切换时先请求对应客户端正常退出；4 秒后仍运行则强制结束该安装目录内的进程，确认停止后备份最新登录文件，写入并重新启动。国内与国际版分别锁定。无法识别进程或未能停止时中止切换，不写登录态。强退可能丢失客户端未保存的编辑内容。
+
+### 安装 IDE 主题
+
+主题和扩展在 **Trae / Trae CN 官方客户端的 IDE 模式**中管理。打开左侧「扩展」，搜索并安装兼容的颜色主题。已有 `.vsix` 文件时，可以在「扩展 → … → 从 VSIX 安装」导入。[Trae 扩展安装文档](https://docs.trae.cn/ide_manage-extensions)
+
+安装后，用 `Cmd+Shift+P`（macOS）或 `Ctrl+Shift+P`（Windows）打开命令面板，搜索「颜色主题」或 `Color Theme` 并选中主题。文件图标主题可通过「文件图标主题」或 `File Icon Theme` 单独切换。
 
 ## 账号与用量
 
@@ -82,3 +129,12 @@ Messages 支持文本、system、tool_use/tool_result 与命名 SSE。工具采�
 macOS 需将应用安装到可写目录，不能直接从 DMG 或 App Translocation 中更新。Windows 便携版需放在独立目录。浏览器／源码开发模式可以检查版本，安装功能仅供打包桌面版使用。检查失败和仓库尚无 Release 会分别显示对应状态，不会误报「已是最新」。
 
 发布更新：推送与 package.json 版本一致的 `vX.Y.Z` 标签，或在 Build desktop apps 手动运行时勾选 publish。全部平台测试及打包成功后，才上传安装包和校验文件到 Releases；默认 main 推送仍仅构建 Artifacts，不发布，也不覆盖已有 Release。
+
+## 近期版本
+
+- **0.8.6** 恢复默认云端反代与临时任务自动清理，隐藏通道开关，并将旧的本地模式配置恢复为云端模式。
+- **0.8.5** 修复本地窗口重新初始化后持续等待的问题，增加保活与处理阶段显示，并避免并发创建本地会话时的数据库锁冲突。
+- **0.8.4** 修复切换本地通道后旧模型目录导致的错误拒绝，自动刷新并迁移能力缓存。
+- **0.8.3** 增加反代通道开关，默认云端任务自动清理，当时也可切换到独立的 Trae 本地会话运行实例。
+- **0.8.1** 使用三列自适应紧凑等高账号卡片，并修复请求趋势图溢出。
+- **0.8.0** 新增关于应用、检查更新和应用内安装更新。账号卡片提供积分包、手动签到、自动签到、反代开关和并发设置。
